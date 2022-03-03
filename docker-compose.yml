@@ -1,0 +1,26 @@
+version: '3'
+
+volumes:
+  ddt_config_gen:
+    external: true
+    name: ddt_config_gen
+
+services:
+  ddt-config-gen:
+    image: antimatter-studios/docker-dev-tools-config-gen:latest
+    container_name: ddt-config-gen
+    command: npx nodemon config-gen.mjs
+    build:
+      context: .
+      args:
+        - RUN_YARN=false
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+      - ddt_config_gen:/config
+      - $PWD:/app
+    environment:
+      DOCKER_SOCKET: /tmp/docker.sock
+      CONFIG_PATH: /config
+
+
