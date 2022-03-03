@@ -3,7 +3,7 @@ version: '3'
 volumes:
   ddt_config_gen:
     external: true
-    name: ddt_config_gen
+    name: ${DOCKER_CONFIG_GEN_VOLUME:-docker_config_gen}
 
 services:
   docker-config-gen:
