@@ -1,12 +1,12 @@
 {
-    "name": "docker-dev-tools-config-gen",
+    "name": "docker-config-gen",
     "license": "MIT",
     "author": "Chris Thomas <chris.thomas@antimatter-studios.com> (@chrisalexthomas)",
-    "main": "config-gen.mjs",
+    "main": "docker-config-gen.mjs",
     "scripts": {
-        "start": "node config-gen.mjs",
-        "dev-start": "docker compose up ddt-config-gen",
-        "dev-stop": "docker compose stop ddt-config-gen"
+        "start": "node docker-config-gen.mjs",
+        "dev-start": "docker compose up docker-config-gen",
+        "dev-stop": "docker compose stop docker-config-gen"
     },
     "dependencies": {
         "docker-event-emitter": "^0.3.0",

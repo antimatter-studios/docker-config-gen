@@ -3,14 +3,40 @@ import fs from 'fs';
 import Docker from 'dockerode';
 import DockerEE from 'docker-event-emitter';
 
+// FIXME: There is a race condition where the docker-config-gen program can get a request
+// FIXME: to generate a configuration, before the requesting container can write the template
+// FIXME: meaning it'll fail because the template file does not exist yet, and will need
+// FIXME: to wait some seconds before it can do that. I should build some logic which can
+// FIXME: detect missing template files, watch them and generate them when the file is
+// FIXME: eventually written
+
+// FIXME: There is another problem where docker-proxy will generate nginx configurations
+// FIXME: for itself, which is not valid, but I don't want to encode into this project
+// FIXME: a special exception. So I should make a way for a container to say "ignore certain containers"
+// FIXME: which would give the docker-proxy a way to tell docker-config-gen program to 
+// FIXME: ignore docker-proxy when passing the template to be rendered
+// FIXME: Or perhaps each configuration can be told it's own containerId, so when the template
+// FIXME: is processing the container list, it has the option to know what "itself" is
+// FIXME: and skip generating those problematic configurations
+
+// FIXME: what if a malicious container joins the server, passing a template which just dumps the entire
+// FIXME: container list and all it's environment parameters, etc to a file and exfiltrates
+// FIXME: it to a remote server. That would be pretty bad. We need to prevent this from happening
+// FIXME: somehow
+// FIXME: Maybe this is why we can't just pass the entire container list with everything
+// FIXME: we know to a rando-template-from-some-cool-container-that-asked-for-it(tm)
+// FIXME: I think the solution is the concept of "renderers" where each type of file
+// FIXME: the docker-config-gen project supports, has an associated renderer with it
+
 (async function main() {
   const options = {
-    socketPath: process.env.DOCKER_SOCKET ?? '/var/run/docker.sock',
     configList: [],
   };
 
   // Create a new Docker connection
-  const docker = new Docker(options);
+  const docker = new Docker({
+    socketPath: process.env.DOCKER_SOCKET ?? '/var/run/docker.sock',
+  });
 
   await init(docker, options);
   
@@ -35,6 +61,11 @@ async function init (docker, options) {
   const containerList = await docker.listContainers();
   // Obtain a list of configuration objects
   options.configList = getConfigurations(docker, containerList);
+
+  if(process.env.DEBUG === 'true'){
+    console.dir({options}, {depth:null});
+  }
+
   await renderConfigurations(docker, options.configList);
 };
 
@@ -47,7 +78,7 @@ function connect (docker, options) {
     options.configList = getConfigurations(docker, containerList);
     await renderConfigurations(docker, options.configList);
     
-    console.log(options);
+    console.dir(options, {depth:null});
   };
 }
 
@@ -60,7 +91,7 @@ function disconnect (docker, options) {
     options.configList = getConfigurations(docker, containerList);
     await renderConfigurations(docker, options.configList);
 
-    console.log(options);
+    console.dir(options, {depth:null});
   };
 }
 
@@ -80,7 +111,7 @@ function removeNetwork(networkList, id)
 function getConfigurations(docker, containerList)
 {
   const list = {};
-  const key = 'ddt-config-gen';
+  const key = 'docker-config-gen';
 
   for(const container of containerList){
     const name = trim(container.Names[0], '/');
@@ -93,7 +124,7 @@ function getConfigurations(docker, containerList)
     if(input === undefined || output === undefined){
       continue;
     }
-
+console.dir({found_networks: container.NetworkSettings.Networks}, {depth:null});
     for(const [name, network] of Object.entries(container.NetworkSettings.Networks)){
       networks = addNetwork(networks, network.NetworkID, name);
     }
@@ -123,6 +154,8 @@ function resolveEnvConfig(env)
   }, {});
 }
 
+// FIXME: this is so specific to the nginx-proxy that I should move it into the template "header"
+// FIXME: and not have this hardcoded into this project which would make the project overall more generic
 function resolveProxyConfig(env, labels)
 {
   const defaultConfig = {
@@ -148,7 +181,7 @@ function resolveProxyConfig(env, labels)
 
   const envConfig = {};
   for (const k of virtualField){
-    if(typeof env[k] !== 'undefined'){
+    if(env[k] !== undefined){
       envConfig[k.split('_').pop().toLowerCase()] = env[k];
     }
   }
@@ -161,11 +194,11 @@ function resolveProxyConfig(env, labels)
   for (let [key, value] of Object.entries(labels)){
     const [project, route, field] = key.split('.');
 
-    if (project !== 'ddt-nginx'){
+    if(project !== 'docker-proxy'){ 
       continue;
     }
 
-    if(typeof labelConfig[route] === 'undefined'){
+    if(labelConfig[route] === undefined){
       labelConfig[route] = {...defaultConfig};
     }
 
@@ -240,8 +273,13 @@ async function renderConfigurations(docker, configList)
 async function renderTemplate(containerList, inputFile, outputFile)
 {
   if(process.env.DEBUG === 'true'){
-    console.log({read: inputFile, write: outputFile});
-    console.dir({containerList}, {depth:null});  
+    console.dir({
+      renderTemplate: {
+        inputFile, 
+        outputFile, 
+        containerList
+      }
+    }, {depth: null});
   }
 
   const data = {
