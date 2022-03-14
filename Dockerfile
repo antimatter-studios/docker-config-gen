@@ -5,12 +5,13 @@ ARG RUN_YARN=true
 
 COPY . /app/
 WORKDIR /app/
-RUN ls -la /app
 
 RUN if [ "${RUN_YARN}" = "true" ]; then \
         apk add --no-cache --virtual .build-deps python3 make cmake g++; \
         echo "Installing packages"; yarn --frozen-lockfile; \
         apk del .build-deps; \
+    else \
+        echo "Skipping yarn install because RUN_YARN='${RUN_YARN}'"; \
     fi
 
 CMD ["yarn", "start"]

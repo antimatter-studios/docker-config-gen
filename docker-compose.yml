@@ -13,7 +13,7 @@ services:
     build:
       context: .
       args:
-        - RUN_YARN=false
+        - RUN_YARN=${RUN_YARN:-false}
     restart: always
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
