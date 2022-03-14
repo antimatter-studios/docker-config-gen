@@ -7,7 +7,7 @@ volumes:
 
 services:
   docker-config-gen:
-    image: antimatter-studios/docker-config-gen:latest
+    image: ghcr.io/antimatter-studios/docker-config-gen:latest
     container_name: docker-config-gen
     command: npx nodemon docker-config-gen.mjs
     build:
