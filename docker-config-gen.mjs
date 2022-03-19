@@ -126,6 +126,9 @@ function getConfigurations(docker, containerList)
     }
 console.dir({found_networks: container.NetworkSettings.Networks}, {depth:null});
     for(const [name, network] of Object.entries(container.NetworkSettings.Networks)){
+      // Don't process networks called bridge
+      if(name === 'bridge') continue;
+
       networks = addNetwork(networks, network.NetworkID, name);
     }
 
