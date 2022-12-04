@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+
+apk add --no-cache --virtual .build-deps python3 make cmake g++;
+cmd="yarn --frozen-lockfile $@";
+echo "cmd '$cmd'";
+exec $cmd;
+apk del .build-deps;
