@@ -103,10 +103,14 @@ async function update(docker: Docker) {
 
 async function runTrigger(docker: Docker, config: Configuration)
 {
-    console.log(`Calling '${config.exec}' on container '${config.id}'`);
-    let c = docker.getContainer(config.id);
-    let e: Docker.Exec = await c.exec({ Cmd: config.exec.split(' ') });
-    await e.start({});
+    try{
+        console.log(`Calling '${config.exec}' on container '${config.id}'`);
+        let c = docker.getContainer(config.id);
+        let e: Docker.Exec = await c.exec({ Cmd: config.exec.split(' ') });
+        await e.start({});
+    }catch(error){
+        console.log(`Could not call '${config.exec}' on container '${config.id}' because docker returned an error saying '${(error as any).reason}'`);
+    }
 }
 
 async function getConfigGenContainerList(docker: Docker): Promise<Docker.ContainerInfo[]> {
@@ -137,7 +141,11 @@ function createConfigList(containerList: Docker.ContainerInfo[]): Configuration[
     }; 
  
     console.log("Found configurations: ");
-    console.dir(configList, {depth:null});
+    if(configList.length > 0){
+        console.dir(configList, {depth:null});
+    }else{
+        console.log("Found no configurations...");
+    }
 
     return configList;
 }
