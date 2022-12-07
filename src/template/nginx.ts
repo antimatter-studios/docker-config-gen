@@ -1,12 +1,11 @@
 import ejs from 'ejs';
-import fs from 'fs';
 import { ltrim } from "../"
 
-export const nginx = async (inputFile: string, outputFile: string, containerData: ContainerInfo[]) => {
-    console.log(`Processing template '${inputFile}' into '${outputFile}'`);
+export const nginx = async (template: string, containerList: ContainerInfo[]): Promise<string> => {
+    console.log(`Processing template...`);
 
     // Remove all containers which don't have valid upstream configurations
-    const upstreams: ContainerInfo[] = filterValidUpstreams(containerData);
+    const upstreams: ContainerInfo[] = filterValidUpstreams(containerList);
 
     // filter the environment variables and labels so only those relating to the virtual host setup remain
     for(const container of upstreams) {
@@ -85,18 +84,28 @@ export const nginx = async (inputFile: string, outputFile: string, containerData
         upstreamList: Object.values(upstreamList),
     }
 
-    if(process.env.DEBUG === 'verbose'){
+    if(process.env.DEBUG){
         console.dir({data}, {depth:null});
     }
 
-    await renderTemplate(inputFile, outputFile, data);
+    try{
+        const response: string = await renderTemplate(template, data);
+
+        if(process.env.DEBUG){
+            console.log("Template Rendered = ");
+            console.log(response.split("\n").map(line => `>   ${line}`).join("\n"));
+        }
+
+        return response;
+    }catch(error){
+        console.log({template, error});
+        return "";
+    }
 }
 
-async function renderTemplate(inputFile: string, outputFile: string, data: any) {
-    console.log(`Writing template '${outputFile}`);
-    let template: string = await ejs.renderFile(inputFile, data, { async: true });
-    template = reformatTemplate(template);
-    await fs.writeFileSync(outputFile, template);
+async function renderTemplate(template: string, data: any) {
+    console.log('Writing template...');
+    return reformatTemplate(await ejs.render(template, data, { async: true }));
 };
 
 function makeVirtualHostFromEnvParams(envVars: EnvironmentList): VirtualHost {

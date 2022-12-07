@@ -5,9 +5,9 @@ interface NetworkList {
 interface Configuration {
     id: string,
     name: string,
-    input: string,
-    output: string,
-    exec: string,
+    request: string,
+    response: string,
+    renderer: string,
     networks: NetworkList,
 }
 
@@ -18,6 +18,10 @@ interface EnvironmentList {
 interface LabelList {
     [id: string]: string
 }
+
+type LabelMap = Map<string, string>;
+
+type NetworkInfoMap = Map<string, NetworkInfo>;
 
 interface NetworkInfo {
     name: string,
@@ -31,6 +35,8 @@ interface Port {
     hostIp?: string,
     hostPort?: string
 }
+
+type ContainerIdList = Set<string>;
 
 interface ContainerInfo {
     id: string

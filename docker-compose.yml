@@ -1,10 +1,5 @@
 version: '3'
 
-volumes:
-  docker_config_gen:
-    external: true
-    name: ${DOCKER_CONFIG_GEN_VOLUME:-docker_config_gen}
-
 services:
   docker-config-gen:
     image: ghcr.io/antimatter-studios/docker-config-gen:latest
@@ -16,7 +11,6 @@ services:
     restart: always
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - docker_config_gen:/config:consistent
       - $PWD:/app
     environment:
-      DEBUG: verbose
+      DEBUG: ${DEBUG:-false}

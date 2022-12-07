@@ -3,8 +3,6 @@ LABEL maintainer="Chris Thomas <chris.alex.thomas@gmail.com> (@chrisalexthomas)"
 
 ARG RUN_YARN=true
 
-ENV CONFIG_PATH=/config
-
 COPY . /app/
 WORKDIR /app/
 
