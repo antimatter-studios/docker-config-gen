@@ -5,7 +5,7 @@
     "main": "src/index.ts",
     "scripts": {
         "start": "nodemon",
-        "pkg": "docker compose run --rm docker-config-gen /app/bin/container-yarn $@",
+        "cyarn": "docker compose run --rm docker-config-gen /app/bin/container-yarn $@",
         "dev-start": "docker compose up docker-config-gen",
         "dev-stop": "docker compose stop docker-config-gen"
     },

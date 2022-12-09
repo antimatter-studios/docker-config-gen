@@ -4,13 +4,16 @@ services:
   docker-config-gen:
     image: ghcr.io/antimatter-studios/docker-config-gen:latest
     container_name: docker-config-gen
-    build:
-      context: .
-      args:
-        - RUN_YARN=${RUN_YARN:-false}
+    build: .
     restart: always
     volumes:
+      # REQUIRED: the software needs access to the docker socket to listen for events
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # OPTIONAL: if you want to run the app in dev mode, this made live code editing possible
       - $PWD:/app
     environment:
+      # turns on a lot of useful debugging for dev purposes
+      # example: DEBUG=true docker compose up
+      # warning: don't use this for production purposes, it'll output plain text env vars with all data into the logs
+      # such as passwords, you have been warned! :)
       DEBUG: ${DEBUG:-false}
