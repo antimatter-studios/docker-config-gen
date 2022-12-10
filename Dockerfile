@@ -6,6 +6,6 @@ WORKDIR /app/
 
 RUN apk add --no-cache --virtual .build-deps python3 make cmake g++; \
     echo "Installing packages"; yarn --frozen-lockfile; \
-    apk del .build-deps; \
+    apk del .build-deps;
 
 CMD ["yarn", "start"]
