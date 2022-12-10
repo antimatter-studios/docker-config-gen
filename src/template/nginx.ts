@@ -1,11 +1,11 @@
 import ejs from 'ejs';
 import { ltrim } from "../"
 
-export const nginx = async (template: string, containerList: ContainerInfo[]): Promise<string> => {
+export const nginx = async (template: string, containerList: ContainerList): Promise<string> => {
     console.log(`Processing template...`);
 
     // Remove all containers which don't have valid upstream configurations
-    const upstreams: ContainerInfo[] = filterValidUpstreams(containerList);
+    const upstreams: ContainerList = filterValidUpstreams(containerList);
 
     // filter the environment variables and labels so only those relating to the virtual host setup remain
     for(const container of upstreams) {
@@ -27,7 +27,7 @@ export const nginx = async (template: string, containerList: ContainerInfo[]): P
 
             // Each container might be available on multiple networks
             // So we add each network to the upstream so if one is not available, it can fall back
-            for(const containerNetwork of container.networks){
+            for(const containerNetwork of Object.values(container.networks)){
                 networkLocationList.push({
                     name: containerNetwork.name,
                     ipAddress: containerNetwork.ipAddress,
@@ -108,7 +108,7 @@ async function renderTemplate(template: string, data: any) {
     return reformatTemplate(await ejs.render(template, data, { async: true }));
 };
 
-function makeVirtualHostFromEnvParams(envVars: EnvironmentList): VirtualHost {
+function makeVirtualHostFromEnvParams(envVars: EnvironmentMap): VirtualHost {
     const defaultPort = 80;
     const defaultProtocol = 'http';
 
@@ -123,7 +123,7 @@ function makeVirtualHostFromEnvParams(envVars: EnvironmentList): VirtualHost {
     };
 }
 
-function makeVirtualHostFromLabels(dockerProxy: string, group: string, labels: LabelList): VirtualHost {
+function makeVirtualHostFromLabels(dockerProxy: string, group: string, labels: LabelMap): VirtualHost {
     const defaultPort = 80;
     const defaultProtocol = 'http';
 
@@ -138,7 +138,7 @@ function makeVirtualHostFromLabels(dockerProxy: string, group: string, labels: L
     };
 }
 
-function makeVirtualHostList(container: ContainerInfo): VirtualHost[] {
+function makeVirtualHostList(container: Container): VirtualHost[] {
     const virtualHostList: VirtualHost[] = [];
 
     if(container.env['VIRTUAL_HOST'] !== undefined) {
@@ -162,8 +162,13 @@ function makeVirtualHostList(container: ContainerInfo): VirtualHost[] {
     return virtualHostList;
 }
 
-function filterEnvVars(envVars: EnvironmentList): EnvironmentList {
-    const filtered: EnvironmentList = {};
+/**
+ * 
+ * @param EnvironmentMap envVars 
+ * @returns EnvironmentMap
+ */
+function filterEnvVars(envVars: EnvironmentMap): EnvironmentMap {
+    const filtered: EnvironmentMap = {};
 
     for (const key in envVars) {
         if(key.startsWith('VIRTUAL')) {
@@ -174,8 +179,13 @@ function filterEnvVars(envVars: EnvironmentList): EnvironmentList {
     return filtered;
 }
 
-function filterLabels(labels: LabelList): LabelList {
-    const filtered: LabelList = {};
+/**
+ * 
+ * @param LabelMap labels 
+ * @returns LabelMap
+ */
+function filterLabels(labels: LabelMap): LabelMap {
+    const filtered: LabelMap = {};
 
     for (const key in labels) {
         if(key.startsWith('docker-proxy')) {
@@ -186,8 +196,8 @@ function filterLabels(labels: LabelList): LabelList {
     return filtered;
 }
 
-function filterValidUpstreams(containerData: ContainerInfo[]): ContainerInfo[] {
-    return containerData.filter((container: ContainerInfo):boolean => {
+function filterValidUpstreams(containerData: ContainerList): ContainerList {
+    return containerData.filter((container: Container):boolean => {
         // Find a single 'host' label in order for this upstream to be potentially processible
         for(const key in container.labels){
             const [project, group, type] = key.split('.');

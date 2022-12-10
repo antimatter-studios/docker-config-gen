@@ -1,32 +1,36 @@
-interface NetworkList {
-    [id: string]: string,
+interface ConfigGenLabels {
+    request: string,
+    response: string,
+    renderer: string,
 }
 
-interface Configuration {
+interface ConfigGen {
     id: string,
     name: string,
     request: string,
     response: string,
     renderer: string,
-    networks: NetworkList,
+    networks: NetworkInfoList,
 }
 
-interface EnvironmentList {
+type ConfigGenList = ConfigGen[];
+
+interface EnvironmentMap {
     [id: string]: string
 }
 
-interface LabelList {
+interface LabelMap {
     [id: string]: string
 }
 
-type LabelMap = Map<string, string>;
-
-type NetworkInfoMap = Map<string, NetworkInfo>;
-
-interface NetworkInfo {
+interface Network {
     name: string,
     ipAddress: string,
     id: string,
+}
+
+interface NetworkMap {
+    [id: string]: Network;
 }
 
 interface Port {
@@ -36,13 +40,19 @@ interface Port {
     hostPort?: string
 }
 
+type PortList = Port[];
+
 type ContainerIdList = Set<string>;
 
-interface ContainerInfo {
+interface Container {
     id: string
     name: string,
-    env: EnvironmentList,
-    labels: LabelList,
-    networks: NetworkInfo[],
-    ports: Port[],
-} 
+    env: EnvironmentMap,
+    labels: LabelMap,
+    networks: NetworkMap,
+    ports: PortList,
+}
+
+type ContainerList = Container[];
+
+class NotConfigGenContainer extends Error {};
