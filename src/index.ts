@@ -128,11 +128,17 @@ async function update(docker: Docker) {
                 const output: string = await templateRenderer(template, containerList);
     
                 // Send the template back to the parent container as a base64 encoded string
-                sendTemplate(docker, config, output);
+                const response: string = await sendTemplate(docker, config, output);
+
+                if(process.env.DEBUG){
+                    console.log("Response from container:");
+                    console.log(quoteString(response));
+                }
 
                 success = true;
             }catch(error) {
                 if(process.env.DEBUG){
+                    console.log("Error information from container exec attempt: ");
                     console.log({error});
                 }
                 
@@ -349,12 +355,17 @@ function makePortList(ports: DockerPortList): PortList {
     return remap;
 }
 
-async function containerExec(container: Docker.Container, execCommand: string): Promise<string> {
+async function containerExec(container: Docker.Container, execCommand: string, args: string[], decodeUtf8: boolean): Promise<string> {
     try{
-        console.log(`Calling '${execCommand}' on container '${container.id}'`);
-                
+        const finalCommand: string = execCommand.split(' ')
+                                                .concat(
+                                                    args.map(input => Buffer.from(input).toString('base64'))
+                                                ).join(' ');
+
+        console.log(`Calling '${finalCommand.slice(0, 50)}...(truncated)' on container '${container.id}'`);
+
         const e: Docker.Exec = await container.exec({ 
-            Cmd: execCommand.split(' '),
+            Cmd: finalCommand.split(' '),
             AttachStdout: true,
             AttachStderr: true,
         });
@@ -372,7 +383,7 @@ async function containerExec(container: Docker.Container, execCommand: string): 
             }
         }
 
-        return Buffer.from(template, 'base64').toString('utf-8');
+        return decodeUtf8 ? Buffer.from(template, 'base64').toString('utf-8') : template;
     }catch(error){
         console.log(`Could not call '${execCommand}' on container '${container.id}' because docker returned an error saying '${(error as any).reason}'`);
         throw error;
@@ -390,7 +401,7 @@ async function containerExec(container: Docker.Container, execCommand: string): 
  */
 async function receiveTemplate(docker: Docker, config: ConfigGen): Promise<string>
 {
-    return await containerExec(docker.getContainer(config.id), config.request);
+    return await containerExec(docker.getContainer(config.id), config.request, [], true);
 }
 
 /**
@@ -402,5 +413,5 @@ async function receiveTemplate(docker: Docker, config: ConfigGen): Promise<strin
  */
 async function sendTemplate(docker: Docker, config: ConfigGen, template: string)
 {
-    return await containerExec(docker.getContainer(config.id), config.response);
+    return await containerExec(docker.getContainer(config.id), config.response, [template], false);
 }
