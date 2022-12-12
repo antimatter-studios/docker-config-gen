@@ -34,16 +34,20 @@ main().catch(err => {
 });
 
 // Why-o-why doesn't javascript have string trimming functions built in? How ridiculous!
-export function ltrim(string: string, charlist: string = "\\s"): string {
-    return string.replace(new RegExp("^[" + charlist + "]+"), "");
+export function ltrim(input: string, charlist: string = "\\s"): string {
+    return input.replace(new RegExp("^[" + charlist + "]+"), "");
 }
 
-export function rtrim(string: string, charlist: string = "\\s"): string {
-    return string.replace(new RegExp("[" + charlist + "]+$"), "");
+export function rtrim(input: string, charlist: string = "\\s"): string {
+    return input.replace(new RegExp("[" + charlist + "]+$"), "");
 }
 
-export function trim(string: string, charlist: string = "\\s"): string {
-    return rtrim(ltrim(string, charlist), charlist);
+export function trim(input: string, charlist: string = "\\s"): string {
+    return rtrim(ltrim(input, charlist), charlist);
+}
+
+export function quoteString(input: string, prefix: string = ">    "): string {
+    return input.split("\n").map(line => `${prefix}${line}`).join("\n")
 }
 
 /**

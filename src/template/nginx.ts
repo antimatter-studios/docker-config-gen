@@ -1,5 +1,5 @@
 import ejs from 'ejs';
-import { ltrim } from "../"
+import { ltrim, quoteString } from "../"
 
 export const nginx = async (template: string, containerList: ContainerList): Promise<string> => {
     console.log(`Processing template...`);
@@ -93,7 +93,7 @@ export const nginx = async (template: string, containerList: ContainerList): Pro
 
         if(process.env.DEBUG){
             console.log("Template Rendered = ");
-            console.log(response.split("\n").map(line => `>   ${line}`).join("\n"));
+            console.log(quoteString(response));
         }
 
         return response;
