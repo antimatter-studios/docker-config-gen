@@ -89,6 +89,12 @@ export const nginx = async (template: string, containerList: ContainerList): Pro
     }
 
     try{
+        // If there are no servers and upstreams, there is nothing to render
+        if(data.serverList.length === 0 && data.upstreamList.length === 0) {
+            console.log("There are no servers or upstreams found");
+            return "";
+        }
+
         const response: string = await renderTemplate(template, data);
 
         if(process.env.DEBUG){
