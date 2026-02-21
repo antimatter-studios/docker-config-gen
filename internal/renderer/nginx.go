@@ -1,7 +1,6 @@
 package renderer
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -9,13 +8,13 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"text/template"
 
 	"github.com/christhomas/docker-config-gen/internal/config"
+	"github.com/flosch/pongo2/v6"
 )
 
-// Nginx renders an Nginx configuration from a Go text/template and container metadata.
-// The template receives .ErrorPageData, .ServerList, and .UpstreamList.
+// Nginx renders an Nginx configuration from a Pongo2 (Jinja2) template and container metadata.
+// The template receives ErrorPageData, ServerList, and UpstreamList.
 func Nginx(tmpl string, containerList []config.Container) (string, error) {
 	log.Println("Processing template...")
 
@@ -101,7 +100,7 @@ func Nginx(tmpl string, containerList []config.Container) (string, error) {
 		return "", nil
 	}
 
-	data := map[string]any{
+	data := pongo2.Context{
 		"ErrorPageData": errorPageData,
 		"ServerList":    servers,
 		"UpstreamList":  upstreamList,
@@ -116,20 +115,20 @@ func Nginx(tmpl string, containerList []config.Container) (string, error) {
 	return rendered, nil
 }
 
-func renderTemplate(tmpl string, data any) (string, error) {
+func renderTemplate(tmpl string, data pongo2.Context) (string, error) {
 	log.Println("Writing template...")
 
-	t, err := template.New("nginx").Parse(tmpl)
+	t, err := pongo2.FromString(tmpl)
 	if err != nil {
 		return "", fmt.Errorf("parsing template: %w", err)
 	}
 
-	var buf bytes.Buffer
-	if err := t.Execute(&buf, data); err != nil {
+	output, err := t.Execute(data)
+	if err != nil {
 		return "", fmt.Errorf("executing template: %w", err)
 	}
 
-	return reformatTemplate(buf.String()), nil
+	return reformatTemplate(output), nil
 }
 
 func makeVirtualHostFromEnv(env map[string]string) config.VirtualHost {
@@ -279,7 +278,6 @@ func filterValidUpstreams(containers []config.Container) []config.Container {
 }
 
 // reformatTemplate cleans up the rendered template with proper indentation.
-// This mirrors the TypeScript reformatTemplate function.
 func reformatTemplate(tmpl string) string {
 	indent := "    "
 	count := 0

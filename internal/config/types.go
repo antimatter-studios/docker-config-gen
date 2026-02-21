@@ -1,22 +1,5 @@
 package config
 
-// ConfigGenLabels are the docker labels that identify a config-gen container.
-type ConfigGenLabels struct {
-	Request  string
-	Response string
-	Renderer string
-}
-
-// ConfigGen represents a container that requests config generation.
-type ConfigGen struct {
-	ID       string
-	Name     string
-	Request  string
-	Response string
-	Renderer string
-	Networks NetworkMap
-}
-
 // Network holds network metadata for a container endpoint.
 type Network struct {
 	Name      string

@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/christhomas/docker-config-gen/internal/config"
-	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
@@ -37,56 +36,21 @@ func (c *Client) Close() error {
 	return c.cli.Close()
 }
 
-// Inner returns the underlying Docker SDK client for use by other packages.
-func (c *Client) Inner() *client.Client {
-	return c.cli
-}
-
-// Debug returns whether debug mode is enabled.
-func (c *Client) Debug() bool {
-	return c.debug
-}
-
-// MakeConfigList filters running containers for those with docker-config-gen labels.
-func (c *Client) MakeConfigList(ctx context.Context) ([]config.ConfigGen, error) {
-	containers, err := c.cli.ContainerList(ctx, container.ListOptions{})
+// GetProxyNetworks inspects the proxy container and returns its non-bridge networks.
+func (c *Client) GetProxyNetworks(ctx context.Context, proxyContainer string) (config.NetworkMap, error) {
+	inspectData, err := c.cli.ContainerInspect(ctx, proxyContainer)
 	if err != nil {
-		return nil, fmt.Errorf("listing containers: %w", err)
+		return nil, fmt.Errorf("inspecting proxy container %s: %w", proxyContainer, err)
 	}
 
-	var configList []config.ConfigGen
+	networks := makeNetworkListFromInspect(inspectData.NetworkSettings.Networks, nil, c.debug)
 
-	for _, ctr := range containers {
-		labels, ok := getConfigGenLabels(ctr.Labels)
-		if !ok {
-			continue
-		}
-
-		name := ctr.Names[0]
-		name = strings.TrimLeft(name, "/")
-
-		networks := makeNetworkListFromSummary(ctr.NetworkSettings, nil, c.debug)
-
-		configList = append(configList, config.ConfigGen{
-			ID:       ctr.ID,
-			Name:     name,
-			Request:  labels.Request,
-			Response: labels.Response,
-			Renderer: labels.Renderer,
-			Networks: networks,
-		})
+	log.Printf("Proxy container '%s' is on %d network(s)", proxyContainer, len(networks))
+	for _, net := range networks {
+		log.Printf("  - %s (%s)", net.Name, net.ID[:12])
 	}
 
-	log.Println("Found configurations:")
-	if len(configList) > 0 {
-		for _, cfg := range configList {
-			log.Printf("  - %s (renderer: %s, networks: %d)", cfg.Name, cfg.Renderer, len(cfg.Networks))
-		}
-	} else {
-		log.Println("  Found no configurations...")
-	}
-
-	return configList, nil
+	return networks, nil
 }
 
 // MakeContainerIDList returns a unique set of container IDs across all networks.
@@ -131,56 +95,6 @@ func (c *Client) MakeContainerList(ctx context.Context, containerIDs map[string]
 	}
 
 	return containers, nil
-}
-
-// getConfigGenLabels extracts docker-config-gen labels from a container.
-func getConfigGenLabels(labels map[string]string) (config.ConfigGenLabels, bool) {
-	request, hasReq := labels["docker-config-gen.request"]
-	response, hasResp := labels["docker-config-gen.response"]
-	renderer, hasRend := labels["docker-config-gen.renderer"]
-
-	if !hasReq || !hasResp || !hasRend {
-		return config.ConfigGenLabels{}, false
-	}
-
-	return config.ConfigGenLabels{
-		Request:  request,
-		Response: response,
-		Renderer: renderer,
-	}, true
-}
-
-// makeNetworkListFromSummary converts container summary network settings to our NetworkMap.
-func makeNetworkListFromSummary(settings *container.NetworkSettingsSummary, allowedNetworks config.NetworkMap, debug bool) config.NetworkMap {
-	if settings == nil {
-		return config.NetworkMap{}
-	}
-
-	result := config.NetworkMap{}
-	for name, endpoint := range settings.Networks {
-		if name == "bridge" {
-			if debug {
-				log.Printf("Skipping over network '%s' because we do not process bridge networks", name)
-			}
-			continue
-		}
-
-		if allowedNetworks != nil {
-			if _, ok := allowedNetworks[endpoint.NetworkID]; !ok {
-				if debug {
-					log.Printf("Skipping over network '%s' because not in the allowed networks", name)
-				}
-				continue
-			}
-		}
-
-		result[endpoint.NetworkID] = config.Network{
-			Name:      name,
-			ID:        endpoint.NetworkID,
-			IPAddress: endpoint.IPAddress,
-		}
-	}
-	return result
 }
 
 // makeNetworkListFromInspect converts full container inspect network settings to our NetworkMap.

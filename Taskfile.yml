@@ -45,7 +45,7 @@ tasks:
   docker:build:
     desc: Build Docker image
     cmds:
-      - docker build -t {{.BINARY}}:latest .
+      - docker compose build --no-cache
 
   docker:run:
     desc: Run with Docker Compose
