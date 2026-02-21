@@ -1,11 +1,16 @@
-FROM node:alpine
+FROM golang:1.23-alpine AS builder
 LABEL maintainer="Chris Thomas <chris.alex.thomas@gmail.com> (@chrisalexthomas)"
 
-COPY . /app/
-WORKDIR /app/
+WORKDIR /build
 
-RUN apk add --no-cache --virtual .build-deps python3 make cmake g++; \
-    echo "Installing packages"; yarn --frozen-lockfile; \
-    apk del .build-deps;
+COPY go.mod go.sum ./
+RUN go mod download
 
-CMD ["yarn", "start"]
+COPY . .
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /docker-config-gen ./cmd/docker-config-gen
+
+FROM alpine:3.20
+
+COPY --from=builder /docker-config-gen /usr/local/bin/docker-config-gen
+
+CMD ["docker-config-gen"]

@@ -1,2 +1,12 @@
-node_modules
+bin/
+build/
+node_modules/
+.git/
+.github/
+.task/
 Dockerfile
+docker-compose.yml
+Taskfile.yml
+*.md
+LICENSE
+src/

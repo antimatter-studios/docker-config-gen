@@ -8,7 +8,6 @@ on:
     tags:
       - '*.*.*'
     paths-ignore:
-      - 'test/*'
       - '.gitignore'
       - 'docker-compose.yml'
       - 'LICENSE'
@@ -18,18 +17,35 @@ env:
   registry: ghcr.io
 
 jobs:
-  multiarch-build:
+  test:
     runs-on: ubuntu-latest
     steps:
-
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Run vet
+        run: go vet ./...
+
+  multiarch-build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Get Docker tags
         id: docker_meta
-        uses: crazy-max/ghaction-docker-meta@v2
+        uses: docker/metadata-action@v5
         with:
           images: |
             ${{ env.registry }}/${{ github.repository }}
@@ -39,16 +55,15 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
           labels: |
             org.opencontainers.image.authors=Chris Thomas <chris.thomas@antimatter-studios.com> (@chrisalexthomas)
-            org.opencontainers.image.version=${{ env.GIT_DESCRIBE }}
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v1
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v1
+        uses: docker/setup-buildx-action@v3
 
       - name: Login to Docker Registry
-        uses: docker/login-action@v1
+        uses: docker/login-action@v3
         with:
           registry: ${{ env.registry }}
           username: ${{ github.actor }}
@@ -56,7 +71,7 @@ jobs:
 
       - name: Build and push the image
         id: docker_build
-        uses: docker/build-push-action@v2
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
