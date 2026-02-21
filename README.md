@@ -1,13 +1,29 @@
 # docker-config-gen
-A docker container monitoring tool which can generate configurations based on docker containers
 
-# Known Issues
+`docker-config-gen` is a Docker event watcher + configuration generator.
 
-1. Race condition to generate a configuration which hasn't yet appeared in the file system
-    - There is a race condition where the docker-config-gen program can get a request to generate a configuration, before the requesting container can write the template meaning it'll fail because the template file does not exist yet, and will need to wait some seconds before it can do that. 
-    - I should build some logic which can detect missing template files, watch them and generate them when the file is eventually written
+It connects to the Docker daemon via the read-only Docker socket, inspects containers, and renders configuration changes using a renderer (currently: `nginx`).
 
-2. Malicious templates could exfiltrate data?
-    - What if a malicious container joins the server, passing a template which just dumps the entire container list and all it's environment parameters, etc to a file and exfiltrates it to a remote server. That would be pretty bad. 
-    - We need to prevent this from happening somehow. Maybe this is why we can't just pass the entire container list with everything we know to a rando-template-from-some-cool-container-that-asked-for-it(tm) 
-    - I think the solution is the concept of "renderers" where each type of file the docker-config-gen project supports, has an associated renderer with it
+## How it works
+
+- **[Docker events]** Watches the Docker socket for container lifecycle events.
+- **[Inspection]** Reads container environment and labels to discover routing metadata.
+- **[Rendering]** Uses `RENDERER` to generate output (for nginx reverse-proxying).
+- **[Management socket]** Talks to the proxy over a Unix domain socket on a shared Docker volume.
+
+## Docker Compose (recommended)
+
+This repo ships a `docker-compose.yml` that runs config-gen with the correct socket + shared volumes. The important parts are:
+
+- `- /var/run/docker.sock:/var/run/docker.sock:ro`
+- `- management:/var/run/proxy`
+- `MANAGEMENT_SOCKET=/var/run/proxy/management.sock`
+- `RENDERER=nginx`
+- `PROXY_CONTAINER=docker-proxy`
+
+`management` and `certs` are expected to be shared with `docker-proxy` (typically `external: true`).
+
+## Security notes
+
+- The Docker socket is powerful; treat this container as privileged.
+- Configuration generation is intentionally constrained by renderer behavior. Avoid running untrusted templates/inputs.

@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/christhomas/docker-config-gen/internal/config"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
@@ -95,6 +97,95 @@ func (c *Client) MakeContainerList(ctx context.Context, containerIDs map[string]
 	}
 
 	return containers, nil
+}
+
+// ListRunningContainerIDs returns the IDs of all running containers.
+func (c *Client) ListRunningContainerIDs(ctx context.Context) ([]string, error) {
+	f := filters.NewArgs()
+	f.Add("status", "running")
+
+	containers, err := c.cli.ContainerList(ctx, container.ListOptions{Filters: f})
+	if err != nil {
+		return nil, fmt.Errorf("listing running containers: %w", err)
+	}
+
+	ids := make([]string, len(containers))
+	for i, ctr := range containers {
+		ids[i] = ctr.ID
+	}
+	return ids, nil
+}
+
+// GetContainerID returns the container ID for a given name or ID.
+func (c *Client) GetContainerID(ctx context.Context, nameOrID string) (string, error) {
+	info, err := c.cli.ContainerInspect(ctx, nameOrID)
+	if err != nil {
+		return "", fmt.Errorf("inspecting %s: %w", nameOrID, err)
+	}
+	return info.ID, nil
+}
+
+// ConnectNetwork connects a container to a Docker network.
+func (c *Client) ConnectNetwork(ctx context.Context, networkName, containerID string) error {
+	return c.cli.NetworkConnect(ctx, networkName, containerID, nil)
+}
+
+// DisconnectNetwork disconnects a container from a Docker network.
+func (c *Client) DisconnectNetwork(ctx context.Context, networkName, containerID string) error {
+	return c.cli.NetworkDisconnect(ctx, networkName, containerID, false)
+}
+
+// DiscoverProxiedNetworks inspects all running containers and returns the set
+// of non-bridge network names that contain proxied containers (those with
+// VIRTUAL_HOST env or docker-proxy.*.host labels). It picks the first
+// non-bridge network per container.
+func (c *Client) DiscoverProxiedNetworks(ctx context.Context) (map[string]struct{}, error) {
+	ids, err := c.ListRunningContainerIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	needed := make(map[string]struct{})
+
+	for _, id := range ids {
+		info, err := c.cli.ContainerInspect(ctx, id)
+		if err != nil {
+			continue
+		}
+
+		env := makeEnvList(info.Config.Env)
+		if !isProxied(env, info.Config.Labels) {
+			continue
+		}
+
+		containerName := strings.TrimLeft(info.Name, "/")
+
+		// Pick the first non-bridge network.
+		for name := range info.NetworkSettings.Networks {
+			if name != "bridge" {
+				needed[name] = struct{}{}
+				if c.debug {
+					log.Printf("Container '%s' needs proxy on network '%s'", containerName, name)
+				}
+				break
+			}
+		}
+	}
+
+	return needed, nil
+}
+
+// isProxied checks if a container has reverse proxy configuration.
+func isProxied(env map[string]string, labels map[string]string) bool {
+	if _, ok := env["VIRTUAL_HOST"]; ok {
+		return true
+	}
+	for key := range labels {
+		if strings.HasPrefix(key, "docker-proxy.") && strings.HasSuffix(key, ".host") {
+			return true
+		}
+	}
+	return false
 }
 
 // makeNetworkListFromInspect converts full container inspect network settings to our NetworkMap.
