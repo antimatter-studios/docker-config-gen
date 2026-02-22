@@ -178,11 +178,9 @@ func (m *Manager) createSidecar(ctx context.Context, spec sidecarSpec, networkID
 	protoUpper := strings.ToUpper(spec.Protocol)
 
 	// socat command: listen on port, fork for each connection, forward to proxy
-	cmd := fmt.Sprintf(
-		"%s-LISTEN:%d,fork,reuseaddr %s:%s:%d",
-		protoUpper, spec.Port,
-		protoUpper, spec.ProxyHost, spec.Port,
-	)
+	// alpine/socat entrypoint is "socat", so Cmd is just the two address arguments
+	listenAddr := fmt.Sprintf("%s-LISTEN:%d,fork,reuseaddr", protoUpper, spec.Port)
+	forwardAddr := fmt.Sprintf("%s:%s:%d", protoUpper, spec.ProxyHost, spec.Port)
 
 	portNat, err := nat.NewPort(spec.Protocol, portStr)
 	if err != nil {
@@ -191,7 +189,7 @@ func (m *Manager) createSidecar(ctx context.Context, spec sidecarSpec, networkID
 
 	cfg := &container.Config{
 		Image: SidecarImage,
-		Cmd:   []string{cmd},
+		Cmd:   []string{listenAddr, forwardAddr},
 		Labels: map[string]string{
 			config.SidecarLabel: "true",
 			LabelSidecarPort:   portStr,
