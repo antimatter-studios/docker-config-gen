@@ -3,12 +3,14 @@ package docker
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"strings"
 
 	"github.com/christhomas/docker-config-gen/internal/config"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
@@ -247,6 +249,78 @@ func makeEnvList(envVars []string) map[string]string {
 		}
 	}
 	return result
+}
+
+// EnsureImage pulls an image if it is not already present locally.
+func (c *Client) EnsureImage(ctx context.Context, ref string) error {
+	_, _, err := c.cli.ImageInspectWithRaw(ctx, ref)
+	if err == nil {
+		return nil // already present
+	}
+
+	log.Printf("Pulling image %s...", ref)
+	reader, err := c.cli.ImagePull(ctx, ref, image.PullOptions{})
+	if err != nil {
+		return fmt.Errorf("pulling image %s: %w", ref, err)
+	}
+	defer reader.Close()
+	_, _ = io.Copy(io.Discard, reader)
+	log.Printf("Image %s pulled successfully", ref)
+	return nil
+}
+
+// CreateContainer creates a container with the given configuration and returns its ID.
+func (c *Client) CreateContainer(ctx context.Context, cfg *container.Config, hostCfg *container.HostConfig, netCfg *network.NetworkingConfig, name string) (string, error) {
+	resp, err := c.cli.ContainerCreate(ctx, cfg, hostCfg, netCfg, nil, name)
+	if err != nil {
+		return "", fmt.Errorf("creating container %s: %w", name, err)
+	}
+	return resp.ID, nil
+}
+
+// StartContainer starts a previously created container.
+func (c *Client) StartContainer(ctx context.Context, containerID string) error {
+	return c.cli.ContainerStart(ctx, containerID, container.StartOptions{})
+}
+
+// RemoveContainer force-removes a container (stops it if running).
+func (c *Client) RemoveContainer(ctx context.Context, containerID string) error {
+	return c.cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
+}
+
+// ListContainersByLabel returns containers matching all given labels (including stopped).
+func (c *Client) ListContainersByLabel(ctx context.Context, labels map[string]string) ([]container.Summary, error) {
+	f := filters.NewArgs()
+	for k, v := range labels {
+		if v == "" {
+			f.Add("label", k)
+		} else {
+			f.Add("label", k+"="+v)
+		}
+	}
+
+	return c.cli.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: f,
+	})
+}
+
+// EnsureNetwork creates a Docker network if it doesn't already exist and returns its ID.
+func (c *Client) EnsureNetwork(ctx context.Context, name string) (string, error) {
+	// Check if network already exists.
+	inspectData, err := c.cli.NetworkInspect(ctx, name, network.InspectOptions{})
+	if err == nil {
+		return inspectData.ID, nil
+	}
+
+	log.Printf("Creating network %s", name)
+	resp, err := c.cli.NetworkCreate(ctx, name, network.CreateOptions{
+		Driver: "bridge",
+	})
+	if err != nil {
+		return "", fmt.Errorf("creating network %s: %w", name, err)
+	}
+	return resp.ID, nil
 }
 
 // makePortList converts Docker's nat.PortMap to our simplified Port slice.

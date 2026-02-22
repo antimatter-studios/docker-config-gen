@@ -5,8 +5,8 @@ services:
     build: .
     restart: always
     volumes:
-      # REQUIRED: access to the docker socket to listen for events and inspect containers
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # REQUIRED: read-write access to the docker socket for events, inspection, and sidecar management
+      - /var/run/docker.sock:/var/run/docker.sock
       # Shared volume for management socket (must match docker-proxy)
       - management:/var/run/proxy
       # Shared volume for TLS certificates (future Let's Encrypt)

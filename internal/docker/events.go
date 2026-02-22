@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 
+	"github.com/christhomas/docker-config-gen/internal/config"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
 )
@@ -53,6 +54,16 @@ func (c *Client) WatchEvents(ctx context.Context) (<-chan events.Message, <-chan
 				// Skip bridge network events.
 				if event.Type == events.NetworkEventType {
 					if event.Actor.Attributes["name"] == "bridge" {
+						continue
+					}
+				}
+
+				// Skip sidecar container events to avoid reconciliation feedback loops.
+				if event.Type == events.ContainerEventType {
+					if event.Actor.Attributes[config.SidecarLabel] == "true" {
+						if c.debug {
+							log.Printf("Skipping sidecar event: %s %s", event.Action, event.Actor.Attributes["name"])
+						}
 						continue
 					}
 				}

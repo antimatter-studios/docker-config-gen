@@ -23,7 +23,7 @@ type streamEntry struct {
 
 // Nginx renders an Nginx configuration from a Pongo2 (Jinja2) template and container metadata.
 // The template receives ErrorPageData, ServerList, UpstreamList, StreamPortList, and StreamUpstreamList.
-func Nginx(tmpl string, containerList []config.Container) (string, error) {
+func Nginx(tmpl string, containerList []config.Container) (config.RenderResult, error) {
 	log.Println("Processing template...")
 
 	// Filter containers to only those with valid upstream configurations
@@ -193,7 +193,7 @@ func Nginx(tmpl string, containerList []config.Container) (string, error) {
 
 	if !hasHTTP && !hasStream {
 		log.Println("There are no servers or upstreams found")
-		return "", nil
+		return config.RenderResult{}, nil
 	}
 
 	data := pongo2.Context{
@@ -207,10 +207,13 @@ func Nginx(tmpl string, containerList []config.Container) (string, error) {
 	rendered, err := renderTemplate(tmpl, data)
 	if err != nil {
 		log.Printf("Template render error: %v", err)
-		return "", err
+		return config.RenderResult{}, err
 	}
 
-	return rendered, nil
+	return config.RenderResult{
+		Config:      rendered,
+		StreamPorts: streamPortList,
+	}, nil
 }
 
 func renderTemplate(tmpl string, data pongo2.Context) (string, error) {

@@ -1,5 +1,17 @@
 package config
 
+const (
+	// SidecarLabel is the Docker label that identifies managed sidecar containers.
+	SidecarLabel = "docker-proxy.sidecar"
+)
+
+// RenderResult holds both the rendered configuration text and the
+// parsed stream port metadata extracted during rendering.
+type RenderResult struct {
+	Config      string
+	StreamPorts []StreamPort
+}
+
 // Network holds network metadata for a container endpoint.
 type Network struct {
 	Name      string

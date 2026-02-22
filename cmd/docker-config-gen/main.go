@@ -13,6 +13,7 @@ import (
 	"github.com/christhomas/docker-config-gen/internal/docker"
 	"github.com/christhomas/docker-config-gen/internal/management"
 	"github.com/christhomas/docker-config-gen/internal/renderer"
+	"github.com/christhomas/docker-config-gen/internal/sidecar"
 )
 
 func main() {
@@ -47,6 +48,7 @@ func main() {
 	defer dockerClient.Close()
 
 	mgmtClient := management.NewClient(managementSocket)
+	sidecarMgr := sidecar.NewManager(dockerClient, proxyContainer, debug)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -82,7 +84,7 @@ func main() {
 	}
 
 	// Initial configuration update on startup (non-blocking — logs errors if proxy isn't ready yet).
-	if err := update(ctx, dockerClient, mgmtClient, proxyContainer, rendererName, debug); err != nil {
+	if err := update(ctx, dockerClient, mgmtClient, sidecarMgr, proxyContainer, rendererName, debug); err != nil {
 		logUpdateError("Initial update", err)
 	}
 
@@ -119,7 +121,7 @@ func main() {
 				debounceTimer.Stop()
 			}
 			debounceTimer = time.AfterFunc(debounce, func() {
-				if err := update(ctx, dockerClient, mgmtClient, proxyContainer, rendererName, debug); err != nil {
+				if err := update(ctx, dockerClient, mgmtClient, sidecarMgr, proxyContainer, rendererName, debug); err != nil {
 					logUpdateError("Update error", err)
 				} else {
 					// Clear rate limiter on success so next error is always logged.
@@ -135,7 +137,7 @@ var lastConfig string
 
 // update discovers containers, syncs proxy networks, and generates nginx configuration.
 // Each phase is independent — if the proxy isn't running, discovery and logging still work.
-func update(ctx context.Context, dockerClient *docker.Client, mgmtClient *management.Client, proxyContainer string, rendererName string, debug bool) error {
+func update(ctx context.Context, dockerClient *docker.Client, mgmtClient *management.Client, sidecarMgr *sidecar.Manager, proxyContainer string, rendererName string, debug bool) error {
 	// Phase 1: Discover which networks have proxied containers.
 	// This works regardless of the proxy's state.
 	neededNetworks, err := dockerClient.DiscoverProxiedNetworks(ctx)
@@ -188,10 +190,12 @@ func update(ctx context.Context, dockerClient *docker.Client, mgmtClient *manage
 		return fmt.Errorf("fetching template from management server: %w", err)
 	}
 
-	output, err := templateRenderer(tmpl, containerList)
+	result, err := templateRenderer(tmpl, containerList)
 	if err != nil {
 		return fmt.Errorf("rendering template: %w", err)
 	}
+
+	output := result.Config
 
 	if debug && output != "" {
 		log.Println("Rendered config:")
@@ -201,6 +205,10 @@ func update(ctx context.Context, dockerClient *docker.Client, mgmtClient *manage
 	// Skip sending if configuration hasn't changed.
 	if output == lastConfig {
 		log.Println("Configuration unchanged, skipping reload")
+		// Still reconcile sidecars — one may have been manually removed.
+		if err := sidecarMgr.Reconcile(ctx, result.StreamPorts); err != nil {
+			log.Printf("WARNING: sidecar reconciliation failed: %v", err)
+		}
 		return nil
 	}
 
@@ -211,6 +219,12 @@ func update(ctx context.Context, dockerClient *docker.Client, mgmtClient *manage
 
 	lastConfig = output
 	log.Println("Configuration updated successfully")
+
+	// Phase 5: Reconcile sidecar containers for TCP/UDP port publishing.
+	if err := sidecarMgr.Reconcile(ctx, result.StreamPorts); err != nil {
+		log.Printf("WARNING: sidecar reconciliation failed: %v", err)
+	}
+
 	return nil
 }
 

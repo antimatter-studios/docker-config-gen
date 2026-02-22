@@ -6,8 +6,9 @@ import (
 	"github.com/christhomas/docker-config-gen/internal/config"
 )
 
-// Renderer processes a template string with container data and returns rendered output.
-type Renderer func(template string, containers []config.Container) (string, error)
+// Renderer processes a template string with container data and returns rendered output
+// along with metadata about the generated configuration.
+type Renderer func(template string, containers []config.Container) (config.RenderResult, error)
 
 // registry maps renderer names to their implementations.
 var registry = map[string]Renderer{
