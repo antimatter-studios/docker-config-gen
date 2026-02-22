@@ -13,8 +13,16 @@ import (
 	"github.com/flosch/pongo2/v6"
 )
 
+// streamEntry holds parsed TCP/UDP label data for a single group (internal to renderer).
+type streamEntry struct {
+	ListenPort int
+	Port       int
+	Protocol   string // "tcp" or "udp"
+	Host       string // optional, for SNI routing
+}
+
 // Nginx renders an Nginx configuration from a Pongo2 (Jinja2) template and container metadata.
-// The template receives ErrorPageData, ServerList, and UpstreamList.
+// The template receives ErrorPageData, ServerList, UpstreamList, StreamPortList, and StreamUpstreamList.
 func Nginx(tmpl string, containerList []config.Container) (string, error) {
 	log.Println("Processing template...")
 
@@ -31,7 +39,20 @@ func Nginx(tmpl string, containerList []config.Container) (string, error) {
 	upstreamMap := make(map[string]*config.Upstream)
 	var errorPageData []string
 
+	// Stream data: keyed by listen port
+	streamUpstreamMap := make(map[string]*config.StreamUpstream)
+	type portInfo struct {
+		protocol string
+		entries  []struct {
+			host     string
+			upstream string
+		}
+		defaultUpstream string
+	}
+	streamPortMap := make(map[int]*portInfo)
+
 	for _, ctr := range upstreams {
+		// Process HTTP virtual hosts
 		virtualHostList := makeVirtualHostList(ctr)
 		var processedPaths []string
 
@@ -83,6 +104,55 @@ func Nginx(tmpl string, containerList []config.Container) (string, error) {
 			jsonBytes, _ := json.Marshal(errorInfo)
 			errorPageData = append(errorPageData, base64.StdEncoding.EncodeToString(jsonBytes))
 		}
+
+		// Process TCP/UDP stream entries
+		streamEntries := makeStreamEntryList(ctr)
+		for _, se := range streamEntries {
+			var networkLocations []config.NetworkLocation
+			for _, net := range ctr.Networks {
+				networkLocations = append(networkLocations, config.NetworkLocation{
+					Name:      net.Name,
+					IPAddress: net.IPAddress,
+					Port:      se.Port,
+				})
+			}
+
+			upstreamName := fmt.Sprintf("%s_%s_%d", se.Protocol, ctr.Name, se.Port)
+			streamUpstreamMap[upstreamName] = &config.StreamUpstream{
+				Name:     upstreamName,
+				Networks: networkLocations,
+			}
+
+			// Group by listen port
+			pi, exists := streamPortMap[se.ListenPort]
+			if !exists {
+				pi = &portInfo{protocol: se.Protocol}
+				streamPortMap[se.ListenPort] = pi
+			}
+
+			// Set default upstream (first one seen for this port)
+			if pi.defaultUpstream == "" {
+				pi.defaultUpstream = upstreamName
+			}
+
+			// If host is specified, add SNI entry
+			if se.Host != "" {
+				pi.entries = append(pi.entries, struct {
+					host     string
+					upstream string
+				}{host: se.Host, upstream: upstreamName})
+			}
+
+			// Build error page data for stream entries too
+			errorInfo := map[string]string{
+				"protocol":  se.Protocol,
+				"host":      se.Host,
+				"path":      "",
+				"container": ctr.Name,
+			}
+			jsonBytes, _ := json.Marshal(errorInfo)
+			errorPageData = append(errorPageData, base64.StdEncoding.EncodeToString(jsonBytes))
+		}
 	}
 
 	// Convert maps to slices
@@ -95,15 +165,43 @@ func Nginx(tmpl string, containerList []config.Container) (string, error) {
 		upstreamList = append(upstreamList, *u)
 	}
 
-	if len(servers) == 0 && len(upstreamList) == 0 {
+	// Build stream port list
+	var streamPortList []config.StreamPort
+	for listenPort, pi := range streamPortMap {
+		sp := config.StreamPort{
+			ListenPort:      listenPort,
+			Protocol:        pi.protocol,
+			HasSNI:          len(pi.entries) > 0,
+			DefaultUpstream: pi.defaultUpstream,
+		}
+		for _, e := range pi.entries {
+			sp.SNIEntries = append(sp.SNIEntries, config.StreamSNIEntry{
+				Host:     e.host,
+				Upstream: e.upstream,
+			})
+		}
+		streamPortList = append(streamPortList, sp)
+	}
+
+	var streamUpstreamList []config.StreamUpstream
+	for _, u := range streamUpstreamMap {
+		streamUpstreamList = append(streamUpstreamList, *u)
+	}
+
+	hasHTTP := len(servers) > 0 || len(upstreamList) > 0
+	hasStream := len(streamPortList) > 0
+
+	if !hasHTTP && !hasStream {
 		log.Println("There are no servers or upstreams found")
 		return "", nil
 	}
 
 	data := pongo2.Context{
-		"ErrorPageData": errorPageData,
-		"ServerList":    servers,
-		"UpstreamList":  upstreamList,
+		"ErrorPageData":      errorPageData,
+		"ServerList":         servers,
+		"UpstreamList":       upstreamList,
+		"StreamPortList":     streamPortList,
+		"StreamUpstreamList": streamUpstreamList,
 	}
 
 	rendered, err := renderTemplate(tmpl, data)
@@ -185,6 +283,16 @@ func makeVirtualHostFromLabels(dockerProxy string, group string, labels map[stri
 	}
 }
 
+// isStreamGroup returns true if the label group has proto=tcp or proto=udp.
+func isStreamGroup(dockerProxy, group string, labels map[string]string) bool {
+	proto, ok := labels[dockerProxy+"."+group+".proto"]
+	if !ok {
+		return false
+	}
+	proto = strings.ToLower(proto)
+	return proto == "tcp" || proto == "udp"
+}
+
 func makeVirtualHostList(ctr config.Container) []config.VirtualHost {
 	var list []config.VirtualHost
 
@@ -206,7 +314,75 @@ func makeVirtualHostList(ctr config.Container) []config.VirtualHost {
 			continue
 		}
 
+		// Skip TCP/UDP groups — handled by makeStreamEntryList
+		if isStreamGroup(parts[0], group, ctr.Labels) {
+			processed[group] = true
+			continue
+		}
+
 		list = append(list, makeVirtualHostFromLabels(parts[0], group, ctr.Labels))
+		processed[group] = true
+	}
+
+	return list
+}
+
+// makeStreamEntryList extracts TCP/UDP stream entries from a container's labels.
+func makeStreamEntryList(ctr config.Container) []streamEntry {
+	var list []streamEntry
+
+	processed := make(map[string]bool)
+	for key := range ctr.Labels {
+		parts := strings.SplitN(key, ".", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		dockerProxy := parts[0]
+		group := parts[1]
+
+		if processed[group] {
+			continue
+		}
+
+		if !isStreamGroup(dockerProxy, group, ctr.Labels) {
+			processed[group] = true
+			continue
+		}
+
+		proto := strings.ToLower(ctr.Labels[dockerProxy+"."+group+".proto"])
+
+		port := 0
+		if p, ok := ctr.Labels[dockerProxy+"."+group+".port"]; ok {
+			if v, err := strconv.Atoi(p); err == nil {
+				port = v
+			}
+		}
+
+		listenPort := port // default: listen on same port as container port
+		if p, ok := ctr.Labels[dockerProxy+"."+group+".listen"]; ok {
+			if v, err := strconv.Atoi(p); err == nil {
+				listenPort = v
+			}
+		}
+
+		if listenPort == 0 {
+			log.Printf("Skipping stream group %q for container %q: no listen port", group, ctr.Name)
+			processed[group] = true
+			continue
+		}
+		if port == 0 {
+			port = listenPort // if no explicit container port, use listen port
+		}
+
+		host := ctr.Labels[dockerProxy+"."+group+".host"] // optional for SNI
+
+		list = append(list, streamEntry{
+			ListenPort: listenPort,
+			Port:       port,
+			Protocol:   proto,
+			Host:       host,
+		})
+
 		processed[group] = true
 	}
 
@@ -237,30 +413,38 @@ func filterValidUpstreams(containers []config.Container) []config.Container {
 	var valid []config.Container
 
 	for _, ctr := range containers {
-		// Check for docker-proxy.*.host labels
-		hasHost := false
+		isValid := false
+
 		for key, val := range ctr.Labels {
 			parts := strings.SplitN(key, ".", 3)
-			if len(parts) != 3 {
+			if len(parts) != 3 || parts[0] != "docker-proxy" {
 				continue
 			}
-			if parts[0] != "docker-proxy" {
-				continue
-			}
+
+			// HTTP upstream: has a non-empty .host label
 			if parts[2] == "host" && len(val) > 0 {
-				hasHost = true
+				isValid = true
 				break
+			}
+
+			// Stream upstream: has .proto = tcp or udp
+			if parts[2] == "proto" {
+				proto := strings.ToLower(val)
+				if proto == "tcp" || proto == "udp" {
+					isValid = true
+					break
+				}
 			}
 		}
 
 		// Check for VIRTUAL_HOST env var
-		if !hasHost {
+		if !isValid {
 			if _, ok := ctr.Env["VIRTUAL_HOST"]; ok {
-				hasHost = true
+				isValid = true
 			}
 		}
 
-		if hasHost {
+		if isValid {
 			// Deep copy to avoid mutating the original
 			clone := config.Container{
 				ID:       ctr.ID,

@@ -63,3 +63,24 @@ type VirtualHost struct {
 	PathIsRegex bool
 	Protocol    string
 }
+
+// StreamPort groups all upstreams sharing the same proxy listen port.
+type StreamPort struct {
+	ListenPort      int
+	Protocol        string // "tcp" or "udp"
+	HasSNI          bool
+	DefaultUpstream string
+	SNIEntries      []StreamSNIEntry
+}
+
+// StreamSNIEntry maps an SNI hostname to a stream upstream.
+type StreamSNIEntry struct {
+	Host     string
+	Upstream string
+}
+
+// StreamUpstream is a named group of backend addresses for stream proxying.
+type StreamUpstream struct {
+	Name     string
+	Networks []NetworkLocation
+}

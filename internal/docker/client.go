@@ -175,14 +175,26 @@ func (c *Client) DiscoverProxiedNetworks(ctx context.Context) (map[string]struct
 	return needed, nil
 }
 
-// isProxied checks if a container has reverse proxy configuration.
+// isProxied checks if a container has reverse proxy configuration
+// (HTTP virtual host labels, TCP/UDP stream labels, or VIRTUAL_HOST env var).
 func isProxied(env map[string]string, labels map[string]string) bool {
 	if _, ok := env["VIRTUAL_HOST"]; ok {
 		return true
 	}
-	for key := range labels {
-		if strings.HasPrefix(key, "docker-proxy.") && strings.HasSuffix(key, ".host") {
+	for key, val := range labels {
+		if !strings.HasPrefix(key, "docker-proxy.") {
+			continue
+		}
+		// HTTP: docker-proxy.*.host
+		if strings.HasSuffix(key, ".host") && len(val) > 0 {
 			return true
+		}
+		// Stream: docker-proxy.*.proto = tcp or udp
+		if strings.HasSuffix(key, ".proto") {
+			proto := strings.ToLower(val)
+			if proto == "tcp" || proto == "udp" {
+				return true
+			}
 		}
 	}
 	return false
