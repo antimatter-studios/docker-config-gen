@@ -54,7 +54,9 @@ func Nginx(tmpl string, containerList []config.Container) (config.RenderResult, 
 	for _, ctr := range upstreams {
 		// Process HTTP virtual hosts
 		virtualHostList := makeVirtualHostList(ctr)
-		var processedPaths []string
+		// Dedup locations per (host, path), NOT per container: multiple vhosts on
+		// one container legitimately share path "/" under different hostnames.
+		processedPaths := map[string]bool{}
 
 		for _, vh := range virtualHostList {
 			var networkLocations []config.NetworkLocation
@@ -83,15 +85,16 @@ func Nginx(tmpl string, containerList []config.Container) (config.RenderResult, 
 				}
 			}
 
-			// Add location if not already processed
-			if !containsString(processedPaths, vh.Path) {
+			// Add location if this host doesn't already have this path
+			key := vh.Host + "\x00" + vh.Path
+			if !processedPaths[key] {
 				serverMap[vh.Host].Locations = append(serverMap[vh.Host].Locations, config.Location{
 					Path:        vh.Path,
 					PathIsRegex: vh.PathIsRegex,
 					Protocol:    vh.Protocol,
 					Upstream:    upstreamName,
 				})
-				processedPaths = append(processedPaths, vh.Path)
+				processedPaths[key] = true
 			}
 
 			// Build error page data as base64-encoded JSON
