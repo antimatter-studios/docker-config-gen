@@ -9,7 +9,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /docker-config-gen ./cmd/docker-config-gen
 
-FROM alpine:3.20
+FROM alpine:3.24
 
 COPY --from=builder /docker-config-gen /usr/local/bin/docker-config-gen
 
