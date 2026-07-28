@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/christhomas/docker-config-gen/internal/config"
+	"github.com/flosch/pongo2/v6"
 )
 
 // streamTemplate is the shape the real nginx.template uses for stream ports: an SNI
@@ -173,6 +174,32 @@ func TestMaxBodySize(t *testing.T) {
 		}
 		if !strings.Contains(out.Config, "client_max_body_size 64m;") {
 			t.Errorf("env override not applied")
+		}
+	})
+
+	// The image tags these run under are floating (`:latest`), so a newer template can
+	// be rendered by an older generator that has never heard of MaxBodySize. The
+	// directive has to be guarded, or that combination emits it with no value and nginx
+	// refuses to load the config — the proxy would not start at all.
+	t.Run("an older generator still renders loadable config", func(t *testing.T) {
+		tpl, err := pongo2.FromString(string(tmpl))
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		out, err := tpl.Execute(pongo2.Context{}) // nothing supplied, as an old generator would
+		if err != nil {
+			t.Fatalf("execute: %v", err)
+		}
+		for _, line := range strings.Split(out, "\n") {
+			// Skip comments: the template documents this very failure mode, and
+			// matching the whole output caught its own explanation.
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+			if trimmed == "client_max_body_size ;" || trimmed == "client_max_body_size;" {
+				t.Errorf("emitted a valueless directive: %q", trimmed)
+			}
 		}
 	})
 
