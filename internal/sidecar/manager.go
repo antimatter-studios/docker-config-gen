@@ -192,8 +192,8 @@ func (m *Manager) createSidecar(ctx context.Context, spec sidecarSpec, networkID
 		Cmd:   []string{listenAddr, forwardAddr},
 		Labels: map[string]string{
 			config.SidecarLabel: "true",
-			LabelSidecarPort:   portStr,
-			LabelSidecarProto:  spec.Protocol,
+			LabelSidecarPort:    portStr,
+			LabelSidecarProto:   spec.Protocol,
 		},
 		ExposedPorts: nat.PortSet{
 			portNat: struct{}{},

@@ -1,6 +1,7 @@
 package renderer
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -133,4 +134,78 @@ func TestHTTPServiceIsNotAStreamPort(t *testing.T) {
 	if strings.Contains(out.Config, "listen 8080;") {
 		t.Errorf("an HTTP service was rendered as a stream port:\n%s", out.Config)
 	}
+}
+
+// TestMaxBodySize renders the REAL template from the docker-proxy repository rather
+// than a fixture, because the point of this pair of changes is that the generator and
+// the template agree: the generator supplies MaxBodySize and reads the per-location
+// label, the template emits both. A fixture would prove neither.
+func TestMaxBodySize(t *testing.T) {
+	tmpl, err := os.ReadFile("../../../docker-proxy/nginx.template")
+	if err != nil {
+		t.Skipf("real template not available beside this checkout: %v", err)
+	}
+
+	t.Run("proxy-wide default is emitted", func(t *testing.T) {
+		out, err := Nginx(string(tmpl), []config.Container{
+			container("api", map[string]string{
+				"docker-proxy.api.host": "app.localhost",
+				"docker-proxy.api.port": "8080",
+			}),
+		})
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		// nginx's own default is 1m, and a proxy that silently caps uploads at 1m
+		// turns a 12MB attachment into a 413 that looks like an application bug.
+		if !strings.Contains(out.Config, "client_max_body_size 512m;") {
+			t.Errorf("default upload limit missing from the rendered config")
+		}
+	})
+
+	t.Run("PROXY_MAX_BODY_SIZE overrides the default", func(t *testing.T) {
+		t.Setenv("PROXY_MAX_BODY_SIZE", "64m")
+		out, err := Nginx(string(tmpl), []config.Container{
+			container("api", map[string]string{"docker-proxy.api.host": "app.localhost"}),
+		})
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		if !strings.Contains(out.Config, "client_max_body_size 64m;") {
+			t.Errorf("env override not applied")
+		}
+	})
+
+	t.Run("a label overrides it for one location only", func(t *testing.T) {
+		out, err := Nginx(string(tmpl), []config.Container{
+			container("uploads", map[string]string{
+				"docker-proxy.up.host":          "app.localhost",
+				"docker-proxy.up.path":          "/uploads",
+				"docker-proxy.up.port":          "8080",
+				"docker-proxy.up.max_body_size": "2g",
+			}),
+			container("api", map[string]string{
+				"docker-proxy.api.host": "app.localhost",
+				"docker-proxy.api.path": "/api",
+				"docker-proxy.api.port": "8080",
+			}),
+		})
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		if !strings.Contains(out.Config, "client_max_body_size 2g;") {
+			t.Errorf("per-location override missing:\n%s", out.Config)
+		}
+		// The override belongs to its own location, not to the whole server: the
+		// /api location must not inherit 2g.
+		uploads := strings.Index(out.Config, `location "/uploads"`)
+		api := strings.Index(out.Config, `location "/api"`)
+		override := strings.Index(out.Config, "client_max_body_size 2g;")
+		if uploads < 0 || api < 0 || override < 0 {
+			t.Fatalf("expected both locations and the override:\n%s", out.Config)
+		}
+		if !(override > uploads && (api < uploads || override < api)) {
+			t.Errorf("the 2g override is not inside the /uploads location:\n%s", out.Config)
+		}
+	})
 }

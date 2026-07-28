@@ -59,6 +59,9 @@ type Location struct {
 	PathIsRegex bool
 	Protocol    string
 	Upstream    string
+	// MaxBodySize overrides the proxy-wide upload limit for this location, from
+	// `docker-proxy.<group>.max_body_size`. Empty means inherit the default.
+	MaxBodySize string
 }
 
 // Server is an nginx server block definition.
@@ -74,6 +77,7 @@ type VirtualHost struct {
 	Path        string
 	PathIsRegex bool
 	Protocol    string
+	MaxBodySize string
 }
 
 // StreamPort groups all upstreams sharing the same proxy listen port.

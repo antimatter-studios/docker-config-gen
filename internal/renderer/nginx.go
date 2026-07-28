@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 
@@ -105,6 +106,7 @@ func Nginx(tmpl string, containerList []config.Container) (config.RenderResult, 
 					PathIsRegex: vh.PathIsRegex,
 					Protocol:    vh.Protocol,
 					Upstream:    upstreamName,
+					MaxBodySize: vh.MaxBodySize,
 				})
 				processedPaths[key] = true
 			}
@@ -223,6 +225,7 @@ func Nginx(tmpl string, containerList []config.Container) (config.RenderResult, 
 	}
 
 	data := pongo2.Context{
+		"MaxBodySize":        maxBodySize(),
 		"ErrorPageData":      errorPageData,
 		"ServerList":         servers,
 		"UpstreamList":       upstreamList,
@@ -241,6 +244,25 @@ func Nginx(tmpl string, containerList []config.Container) (config.RenderResult, 
 		StreamPorts: streamPortList,
 	}, nil
 }
+
+// maxBodySize is the proxy-wide upload limit, overridable per location by
+// `docker-proxy.<group>.max_body_size`.
+//
+// It has to be set somewhere: nginx defaults to 1m, and this proxy previously
+// received `client_max_body_size 512m;` as a file copied in by the orchestrator. That
+// copying was removed when configuration generation moved here, and nothing replaced
+// the value — so uploads over 1m started failing with 413 while looking like an
+// application fault.
+func maxBodySize() string {
+	if v := strings.TrimSpace(os.Getenv("PROXY_MAX_BODY_SIZE")); v != "" {
+		return v
+	}
+	return defaultMaxBodySize
+}
+
+// defaultMaxBodySize matches what the orchestrator used to copy in, so this is not a
+// behaviour change for anyone who had it working before.
+const defaultMaxBodySize = "512m"
 
 func renderTemplate(tmpl string, data pongo2.Context) (string, error) {
 	log.Println("Writing template...")
@@ -309,6 +331,7 @@ func makeVirtualHostFromLabels(dockerProxy string, group string, labels map[stri
 		Path:        path,
 		PathIsRegex: strings.HasPrefix(path, "^"),
 		Protocol:    protocol,
+		MaxBodySize: labels[dockerProxy+"."+group+".max_body_size"],
 	}
 }
 
