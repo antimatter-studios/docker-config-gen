@@ -19,6 +19,15 @@ type streamEntry struct {
 	Port       int
 	Protocol   string // "tcp" or "udp"
 	Host       string // optional, for SNI routing
+	// SSL means the client speaks TLS first, so nginx can read SNI and route by
+	// hostname. Off unless `docker-proxy.<group>.ssl=true`.
+	//
+	// It must be opt-in, because `ssl_preread on` blocks until the client sends a
+	// ClientHello. On a protocol where the SERVER greets first — SMTP, IMAP, POP3 in
+	// plaintext — both ends then wait and the connection hangs. Enabling it for every
+	// stream port made those unusable through the proxy while TLS-first ports (465,
+	// 993, 995) worked.
+	SSL bool
 }
 
 // Nginx renders an Nginx configuration from a Pongo2 (Jinja2) template and container metadata.
@@ -48,6 +57,9 @@ func Nginx(tmpl string, containerList []config.Container) (config.RenderResult, 
 			upstream string
 		}
 		defaultUpstream string
+		// ssl is true when any container on this listen port asked for TLS handling;
+		// only then can the port be routed by SNI.
+		ssl bool
 	}
 	streamPortMap := make(map[int]*portInfo)
 
@@ -136,6 +148,15 @@ func Nginx(tmpl string, containerList []config.Container) (config.RenderResult, 
 			// Set default upstream (first one seen for this port)
 			if pi.defaultUpstream == "" {
 				pi.defaultUpstream = upstreamName
+			} else if !se.SSL && pi.defaultUpstream != upstreamName {
+				// Without TLS there is no SNI, so there is nothing to route on and a
+				// port can serve exactly one upstream. Say so rather than silently
+				// letting whichever container was seen first win.
+				log.Printf("Port %d is declared by %q as well as %q, and is not TLS (no ssl=true), so it cannot be routed by hostname: keeping %q",
+					se.ListenPort, upstreamName, pi.defaultUpstream, pi.defaultUpstream)
+			}
+			if se.SSL {
+				pi.ssl = true
 			}
 
 			// If host is specified, add SNI entry
@@ -172,9 +193,11 @@ func Nginx(tmpl string, containerList []config.Container) (config.RenderResult, 
 	var streamPortList []config.StreamPort
 	for listenPort, pi := range streamPortMap {
 		sp := config.StreamPort{
-			ListenPort:      listenPort,
-			Protocol:        pi.protocol,
-			HasSNI:          len(pi.entries) > 0,
+			ListenPort: listenPort,
+			Protocol:   pi.protocol,
+			// SNI routing needs BOTH a hostname to match and a TLS client, since the
+			// hostname is only readable from a ClientHello.
+			HasSNI:          pi.ssl && len(pi.entries) > 0,
 			DefaultUpstream: pi.defaultUpstream,
 		}
 		for _, e := range pi.entries {
@@ -382,11 +405,20 @@ func makeStreamEntryList(ctr config.Container) []streamEntry {
 
 		host := ctr.Labels[dockerProxy+"."+group+".host"] // optional for SNI
 
+		// `ssl` is opt-in: a plain-text port must not get ssl_preread. Anything other
+		// than a clear yes is treated as no, so a typo fails towards the safer path.
+		ssl := false
+		switch strings.ToLower(ctr.Labels[dockerProxy+"."+group+".ssl"]) {
+		case "true", "1", "yes", "on":
+			ssl = true
+		}
+
 		list = append(list, streamEntry{
 			ListenPort: listenPort,
 			Port:       port,
 			Protocol:   proto,
 			Host:       host,
+			SSL:        ssl,
 		})
 
 		processed[group] = true
