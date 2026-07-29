@@ -119,6 +119,58 @@ func TestSSLLabelAcceptsOnlyClearAffirmatives(t *testing.T) {
 	}
 }
 
+// ddt publishes a TCP port by running a sidecar container that forwards the host port
+// into nginx. It marks that container with docker-proxy.sidecar=true, plus
+// docker-proxy.sidecar.port and .proto — which parse as a service group called
+// "sidecar", so the generator registered the sidecar as an upstream FOR ITS OWN PORT.
+//
+// nginx then forwarded the port back to the thing that had just forwarded it in. Ports
+// 465 and 995 hung outright; 993 survived only because the real gateway happened to win
+// the same race. It went unnoticed while every stream port did SNI routing, because the
+// real service matched by hostname and only non-SNI traffic fell into the loop.
+func TestSidecarIsNeverItsOwnUpstream(t *testing.T) {
+	out, err := Nginx(streamTemplate, []config.Container{
+		container("docker-proxy-sidecar-tcp-465", map[string]string{
+			"docker-proxy.sidecar":       "true",
+			"docker-proxy.sidecar.port":  "465",
+			"docker-proxy.sidecar.proto": "tcp",
+		}),
+		container("smtp-gateway", map[string]string{
+			"docker-proxy.submissions.proto": "tcp",
+			"docker-proxy.submissions.port":  "465",
+			"docker-proxy.submissions.host":  "mail.localhost",
+			"docker-proxy.submissions.ssl":   "true",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if strings.Contains(out.Config, "sidecar") {
+		t.Errorf("a sidecar container was used as an upstream:\n%s", out.Config)
+	}
+	if !strings.Contains(out.Config, "smtp-gateway") {
+		t.Errorf("the real service is not the upstream for its port:\n%s", out.Config)
+	}
+}
+
+// The same container, with no other service claiming the port: the port must simply not
+// be rendered, rather than rendered as a loop back into nginx.
+func TestSidecarAloneRendersNoStreamPort(t *testing.T) {
+	out, err := Nginx(streamTemplate, []config.Container{
+		container("docker-proxy-sidecar-tcp-995", map[string]string{
+			"docker-proxy.sidecar":       "true",
+			"docker-proxy.sidecar.port":  "995",
+			"docker-proxy.sidecar.proto": "tcp",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if strings.Contains(out.Config, "listen 995;") {
+		t.Errorf("port 995 was rendered with only a sidecar to point at:\n%s", out.Config)
+	}
+}
+
 // An HTTP service is unaffected: it has no `proto` label, so it never becomes a
 // stream port regardless of this change.
 func TestHTTPServiceIsNotAStreamPort(t *testing.T) {
