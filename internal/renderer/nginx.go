@@ -470,10 +470,32 @@ func filterLabels(labels map[string]string) map[string]string {
 	return filtered
 }
 
+// isSidecar reports whether a container is one of the port-publishing sidecars the
+// orchestrator runs, rather than a service to route to.
+//
+// Matched on the marker label alone. Anything under docker-proxy.sidecar.* belongs to
+// that machinery and is not a service declaration, whatever it happens to look like.
+func isSidecar(labels map[string]string) bool {
+	switch strings.ToLower(labels["docker-proxy.sidecar"]) {
+	case "true", "yes", "on", "1":
+		return true
+	}
+	return false
+}
+
 func filterValidUpstreams(containers []config.Container) []config.Container {
 	var valid []config.Container
 
 	for _, ctr := range containers {
+		// A sidecar is how a host port reaches nginx in the first place, so it can never
+		// be something nginx forwards TO. Its marker labels —
+		// docker-proxy.sidecar.port / .proto — otherwise parse as a service group named
+		// "sidecar" claiming that very port, and nginx ends up passing the port straight
+		// back to whatever just handed it over. 465 and 995 hung outright.
+		if isSidecar(ctr.Labels) {
+			continue
+		}
+
 		isValid := false
 
 		for key, val := range ctr.Labels {
