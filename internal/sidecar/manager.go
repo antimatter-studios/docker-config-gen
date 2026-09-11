@@ -4,14 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/netip"
 	"strconv"
 	"strings"
 
 	"github.com/christhomas/docker-config-gen/internal/config"
 	"github.com/christhomas/docker-config-gen/internal/docker"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 )
 
 const (
@@ -182,9 +182,9 @@ func (m *Manager) createSidecar(ctx context.Context, spec sidecarSpec, networkID
 	listenAddr := fmt.Sprintf("%s-LISTEN:%d,fork,reuseaddr", protoUpper, spec.Port)
 	forwardAddr := fmt.Sprintf("%s:%s:%d", protoUpper, spec.ProxyHost, spec.Port)
 
-	portNat, err := nat.NewPort(spec.Protocol, portStr)
+	port, err := network.ParsePort(portStr + "/" + spec.Protocol)
 	if err != nil {
-		return fmt.Errorf("creating nat port: %w", err)
+		return fmt.Errorf("parsing sidecar port: %w", err)
 	}
 
 	cfg := &container.Config{
@@ -195,15 +195,15 @@ func (m *Manager) createSidecar(ctx context.Context, spec sidecarSpec, networkID
 			LabelSidecarPort:    portStr,
 			LabelSidecarProto:   spec.Protocol,
 		},
-		ExposedPorts: nat.PortSet{
-			portNat: struct{}{},
+		ExposedPorts: network.PortSet{
+			port: struct{}{},
 		},
 	}
 
 	hostCfg := &container.HostConfig{
-		PortBindings: nat.PortMap{
-			portNat: []nat.PortBinding{
-				{HostIP: "0.0.0.0", HostPort: portStr},
+		PortBindings: network.PortMap{
+			port: []network.PortBinding{
+				{HostIP: netip.IPv4Unspecified(), HostPort: portStr},
 			},
 		},
 		RestartPolicy: container.RestartPolicy{

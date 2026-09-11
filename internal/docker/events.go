@@ -5,8 +5,8 @@ import (
 	"log"
 
 	"github.com/christhomas/docker-config-gen/internal/config"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/api/types/filters"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/client"
 )
 
 // WatchEvents listens for Docker container and network events and sends them
@@ -21,7 +21,7 @@ func (c *Client) WatchEvents(ctx context.Context) (<-chan events.Message, <-chan
 		defer close(out)
 		defer close(errOut)
 
-		filter := filters.NewArgs()
+		filter := make(client.Filters)
 
 		// Container lifecycle events.
 		filter.Add("type", string(events.ContainerEventType))
@@ -33,9 +33,10 @@ func (c *Client) WatchEvents(ctx context.Context) (<-chan events.Message, <-chan
 		filter.Add("event", "connect")
 		filter.Add("event", "disconnect")
 
-		eventCh, dockerErrCh := c.cli.Events(ctx, events.ListOptions{
+		result := c.cli.Events(ctx, client.EventsListOptions{
 			Filters: filter,
 		})
+		eventCh, dockerErrCh := result.Messages, result.Err
 
 		log.Println("Listening for Docker events...")
 
