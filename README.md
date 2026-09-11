@@ -17,11 +17,13 @@ This repo ships a `docker-compose.yml` that runs config-gen with the correct soc
 
 - `- /var/run/docker.sock:/var/run/docker.sock:ro`
 - `- management:/var/run/proxy`
+- `- certs:/etc/nginx/certs` and `- <ca>:/etc/docker-config-gen/ca:ro` (only for [HTTPS](#https))
 - `MANAGEMENT_SOCKET=/var/run/proxy/management.sock`
 - `RENDERER=nginx`
 - `PROXY_CONTAINER=docker-proxy`
+- `CA_DIR=/etc/docker-config-gen/ca` and `CERTS_DIR=/etc/nginx/certs` (the defaults)
 
-`management` and `certs` are expected to be shared with `docker-proxy` (typically `external: true`).
+`management` and `certs` are expected to be shared with `docker-proxy` (typically `external: true`). Mount `certs` at the same path in both containers: the paths written here go into the proxy's configuration.
 
 ## Container label format
 
@@ -62,13 +64,21 @@ environment:
   VIRTUAL_PROTO: http
 ```
 
+## HTTPS
+
+When a CA is mounted at `CA_DIR` (`ca.crt` and `ca.key`, PEM), every HTTP host is also served over HTTPS. There is no label for it: the host name is the certificate's name. For each host the generator keeps `<host>.pem` in `CERTS_DIR`, holding the certificate and its key together so a renewal replaces both at once (a host name too long to be a file name is hashed). It is issued on first sight and replaced when fewer than 30 days remain, when the CA changes, or when it doesn't match the host. Certificates are valid for 825 days, the most Apple platforms accept.
+
+A host the CA cannot vouch for, such as a name outside the CA's name constraints or an nginx regular expression, is logged once and stays HTTP-only. With no CA mounted, every host is HTTP-only, as before.
+
+The CA is created by the orchestrator (ddt does this when the proxy starts); this container only reads it, once, when it starts, so restart it after replacing the CA (ddt does). Software that should verify the proxy's certificates trusts that CA directly.
+
 ## Renderer
 
 The `nginx` renderer builds template context data from inspected containers:
 
 | Template variable | Description |
 |---|---|
-| `ServerList` | HTTP server blocks (from `host` labels / `VIRTUAL_HOST`) |
+| `ServerList` | HTTP server blocks (from `host` labels / `VIRTUAL_HOST`): `Host`, `Locations`, and `Certificate` / `CertificateKey` when the host has HTTPS |
 | `UpstreamList` | HTTP upstream blocks with network addresses |
 | `StreamPortList` | TCP/UDP listen directives with optional SNI maps |
 | `StreamUpstreamList` | TCP/UDP upstream blocks |
@@ -79,4 +89,5 @@ The rendered output uses the `### STREAM_CONFIG ###` delimiter to separate HTTP 
 ## Security notes
 
 - The Docker socket is powerful; treat this container as privileged.
+- The CA key is mounted here read-only and nowhere else: the proxy only ever sees the per-host certificates. Keep the CA restricted to development names (name constraints), so the key cannot vouch for real sites.
 - Configuration generation is intentionally constrained by renderer behavior. Avoid running untrusted templates/inputs.

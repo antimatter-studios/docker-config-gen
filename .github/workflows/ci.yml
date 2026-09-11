@@ -70,7 +70,7 @@ jobs:
         working-directory: docker-config-gen
         run: |
           set -euo pipefail
-          out=$(go test -count=1 -v ./internal/renderer/ -run TestMaxBodySize)
+          out=$(go test -count=1 -v ./internal/renderer/ -run 'TestMaxBodySize|TestHTTPS')
           echo "$out" | tail -30
           if echo "$out" | grep -q '^--- SKIP'; then
             echo "the tests that render the real template skipped; the template was not found" >&2

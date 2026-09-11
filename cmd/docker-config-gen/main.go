@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/christhomas/docker-config-gen/internal/certs"
 	"github.com/christhomas/docker-config-gen/internal/docker"
 	"github.com/christhomas/docker-config-gen/internal/management"
 	"github.com/christhomas/docker-config-gen/internal/renderer"
@@ -40,6 +42,18 @@ func main() {
 	}
 
 	debug := strings.ToLower(os.Getenv("DEBUG")) == "true"
+
+	// HTTPS is on when a CA has been mounted in. CERTS_DIR must be where the proxy sees
+	// the same certs volume, because the paths written here go into its configuration.
+	caDir := os.Getenv("CA_DIR")
+	if caDir == "" {
+		caDir = "/etc/docker-config-gen/ca"
+	}
+	certsDir := os.Getenv("CERTS_DIR")
+	if certsDir == "" {
+		certsDir = "/etc/nginx/certs"
+	}
+	certSource := loadCertificates(caDir, certsDir)
 
 	dockerClient, err := docker.NewClient(dockerSocket, debug)
 	if err != nil {
@@ -84,7 +98,7 @@ func main() {
 	}
 
 	// Initial configuration update on startup (non-blocking — logs errors if proxy isn't ready yet).
-	if err := update(ctx, dockerClient, mgmtClient, sidecarMgr, proxyContainer, rendererName, debug); err != nil {
+	if err := update(ctx, dockerClient, mgmtClient, sidecarMgr, proxyContainer, rendererName, certSource, debug); err != nil {
 		logUpdateError("Initial update", err)
 	}
 
@@ -93,6 +107,25 @@ func main() {
 	// into a single update after a quiet period.
 	const debounce = 2 * time.Second
 	var debounceTimer *time.Timer
+	schedule := func() {
+		// Reset the debounce timer on each trigger.
+		if debounceTimer != nil {
+			debounceTimer.Stop()
+		}
+		debounceTimer = time.AfterFunc(debounce, func() {
+			if err := update(ctx, dockerClient, mgmtClient, sidecarMgr, proxyContainer, rendererName, certSource, debug); err != nil {
+				logUpdateError("Update error", err)
+			} else {
+				// Clear rate limiter on success so next error is always logged.
+				lastErrMsg = ""
+			}
+		})
+	}
+
+	// Certificates are renewed during an update, and a quiet machine can go months
+	// without a Docker event, so an update also runs on a timer.
+	renew := time.NewTicker(12 * time.Hour)
+	defer renew.Stop()
 
 	for {
 		select {
@@ -116,20 +149,29 @@ func main() {
 				log.Println("Event channel closed, shutting down")
 				return
 			}
-			// Reset the debounce timer on each event.
-			if debounceTimer != nil {
-				debounceTimer.Stop()
-			}
-			debounceTimer = time.AfterFunc(debounce, func() {
-				if err := update(ctx, dockerClient, mgmtClient, sidecarMgr, proxyContainer, rendererName, debug); err != nil {
-					logUpdateError("Update error", err)
-				} else {
-					// Clear rate limiter on success so next error is always logged.
-					lastErrMsg = ""
-				}
-			})
+			schedule()
+
+		case <-renew.C:
+			schedule()
 		}
 	}
+}
+
+// loadCertificates returns the issuer for HTTPS, or nil to leave every host HTTP-only.
+// No CA mounted is the normal case for a setup without HTTPS; a broken one is reported
+// but must not stop HTTP routing.
+func loadCertificates(caDir, certsDir string) renderer.CertificateSource {
+	issuer, err := certs.Load(caDir, certsDir)
+	switch {
+	case err == nil:
+		log.Printf("HTTPS on: issuing certificates into %s with the CA in %s", certsDir, caDir)
+		return issuer
+	case errors.Is(err, certs.ErrNoCA):
+		log.Printf("HTTPS off: no CA in %s", caDir)
+	default:
+		log.Printf("HTTPS off: %v", err)
+	}
+	return nil
 }
 
 // lastConfig tracks the previously sent configuration to avoid unnecessary reloads.
@@ -137,7 +179,7 @@ var lastConfig string
 
 // update discovers containers, syncs proxy networks, and generates nginx configuration.
 // Each phase is independent — if the proxy isn't running, discovery and logging still work.
-func update(ctx context.Context, dockerClient *docker.Client, mgmtClient *management.Client, sidecarMgr *sidecar.Manager, proxyContainer string, rendererName string, debug bool) error {
+func update(ctx context.Context, dockerClient *docker.Client, mgmtClient *management.Client, sidecarMgr *sidecar.Manager, proxyContainer string, rendererName string, certSource renderer.CertificateSource, debug bool) error {
 	// Phase 1: Discover which networks have proxied containers.
 	// This works regardless of the proxy's state.
 	neededNetworks, err := dockerClient.DiscoverProxiedNetworks(ctx)
@@ -190,7 +232,7 @@ func update(ctx context.Context, dockerClient *docker.Client, mgmtClient *manage
 		return fmt.Errorf("fetching template from management server: %w", err)
 	}
 
-	result, err := templateRenderer(tmpl, containerList)
+	result, err := templateRenderer(tmpl, containerList, certSource)
 	if err != nil {
 		return fmt.Errorf("rendering template: %w", err)
 	}
@@ -202,8 +244,9 @@ func update(ctx context.Context, dockerClient *docker.Client, mgmtClient *manage
 		log.Println(quoteString(output, ">    "))
 	}
 
-	// Skip sending if configuration hasn't changed.
-	if output == lastConfig {
+	// Skip sending if configuration hasn't changed. A renewed certificate still needs a
+	// send: nginx reads certificate files only when it loads its configuration.
+	if output == lastConfig && !result.CertificatesChanged {
 		log.Println("Configuration unchanged, skipping reload")
 		// Still reconcile sidecars — one may have been manually removed.
 		if err := sidecarMgr.Reconcile(ctx, result.StreamPorts); err != nil {

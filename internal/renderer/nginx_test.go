@@ -288,3 +288,124 @@ func TestMaxBodySize(t *testing.T) {
 		}
 	})
 }
+
+// fakeCerts hands out certificate paths for the hosts it holds, as an issuer would once
+// it had issued them. The value is whether the files were just written.
+type fakeCerts map[string]bool
+
+func (f fakeCerts) Certificate(host string) (string, string, bool, bool) {
+	changed, ok := f[host]
+	if !ok {
+		return "", "", false, false
+	}
+	return "/etc/nginx/certs/" + host + ".crt", "/etc/nginx/certs/" + host + ".key", changed, true
+}
+
+// serverBlock returns the rendered server block for host: from its server_name to the
+// next server block.
+func serverBlock(t *testing.T, config, host string) string {
+	t.Helper()
+	start := strings.Index(config, "server_name "+host+";")
+	if start < 0 {
+		t.Fatalf("no server block for %s:\n%s", host, config)
+	}
+	block := config[start:]
+	if end := strings.Index(block, "server {"); end >= 0 {
+		block = block[:end]
+	}
+	return block
+}
+
+// TestHTTPS renders the REAL template, for the same reason as TestMaxBodySize: the
+// generator supplies each host's certificate, and the template has to turn it into an
+// HTTPS listener for that host alone.
+func TestHTTPS(t *testing.T) {
+	tmpl, err := os.ReadFile("../../../docker-proxy/nginx.template")
+	if err != nil {
+		t.Skipf("real template not available beside this checkout: %v", err)
+	}
+	containers := []config.Container{
+		container("app", map[string]string{"docker-proxy.app.host": "app.localhost", "docker-proxy.app.port": "8080"}),
+		container("other", map[string]string{"docker-proxy.other.host": "other.localhost", "docker-proxy.other.port": "8080"}),
+	}
+
+	t.Run("a host with a certificate listens on 443 with it", func(t *testing.T) {
+		out, err := NginxWithCertificates(string(tmpl), containers, fakeCerts{"app.localhost": false})
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		block := serverBlock(t, out.Config, "app.localhost")
+		for _, want := range []string{
+			"listen 443 ssl;",
+			"ssl_certificate /etc/nginx/certs/app.localhost.crt;",
+			"ssl_certificate_key /etc/nginx/certs/app.localhost.key;",
+		} {
+			if !strings.Contains(block, want) {
+				t.Errorf("missing %q in the app.localhost block:\n%s", want, block)
+			}
+		}
+	})
+
+	t.Run("a host without one stays HTTP-only", func(t *testing.T) {
+		out, err := NginxWithCertificates(string(tmpl), containers, fakeCerts{"app.localhost": false})
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		if block := serverBlock(t, out.Config, "other.localhost"); strings.Contains(block, "443") {
+			t.Errorf("a host with no certificate listens on 443:\n%s", block)
+		}
+	})
+
+	// Without a catch-all, nginx answers an unknown name on 443 with whichever host's
+	// certificate comes first, and the client sees someone else's host name.
+	t.Run("unknown names have the handshake refused", func(t *testing.T) {
+		out, err := Nginx(string(tmpl), containers)
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		if !strings.Contains(out.Config, "listen 443 ssl default_server;") || !strings.Contains(out.Config, "ssl_reject_handshake on;") {
+			t.Errorf("no refusing catch-all on 443:\n%s", out.Config)
+		}
+	})
+
+	t.Run("a newly written certificate is reported, so nginx reloads", func(t *testing.T) {
+		out, err := NginxWithCertificates(string(tmpl), containers, fakeCerts{"app.localhost": true})
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		if !out.CertificatesChanged {
+			t.Error("a written certificate was not reported")
+		}
+		out, err = NginxWithCertificates(string(tmpl), containers, fakeCerts{"app.localhost": false})
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		if out.CertificatesChanged {
+			t.Error("an unchanged certificate was reported as written")
+		}
+	})
+
+	// The image tags are floating, so this template can be rendered by a generator from
+	// before certificates existed. Its servers have no Certificate field, and every host
+	// must then stay HTTP-only rather than name a file that isn't there.
+	t.Run("an older generator leaves every host HTTP-only", func(t *testing.T) {
+		tpl, err := pongo2.FromString(string(tmpl))
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		type oldServer struct {
+			Host      string
+			Locations []config.Location
+		}
+		out, err := tpl.Execute(pongo2.Context{"ServerList": []oldServer{{Host: "app.localhost"}}})
+		if err != nil {
+			t.Fatalf("execute: %v", err)
+		}
+		if !strings.Contains(out, "server_name app.localhost;") {
+			t.Fatalf("the host was not rendered:\n%s", out)
+		}
+		if strings.Contains(out, "ssl_certificate") {
+			t.Errorf("an older generator's host was given a certificate directive:\n%s", out)
+		}
+	})
+}
