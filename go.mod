@@ -1,6 +1,6 @@
 module github.com/christhomas/docker-config-gen
 
-go 1.25.0
+go 1.27.1
 
 require (
 	github.com/flosch/pongo2/v6 v6.1.0
