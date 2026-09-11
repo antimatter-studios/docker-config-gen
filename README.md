@@ -70,7 +70,7 @@ When a CA is mounted at `CA_DIR` (`ca.crt` and `ca.key`, PEM), every HTTP host i
 
 A host the CA cannot vouch for, such as a name outside the CA's name constraints or an nginx regular expression, is logged once and stays HTTP-only. With no CA mounted, every host is HTTP-only, as before.
 
-The CA is created and trusted on the developer's machine by the orchestrator (ddt does this on install); this container only reads it.
+The CA is created by the orchestrator (ddt does this when the proxy starts); this container only reads it. Software that should verify the proxy's certificates trusts that CA directly.
 
 ## Renderer
 

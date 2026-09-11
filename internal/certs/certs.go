@@ -1,9 +1,9 @@
 // Package certs issues the per-host TLS certificates the proxy serves HTTPS with.
 //
-// They are signed by a local certificate authority that the orchestrator creates and
-// trusts on the developer's machine (ddt does this on install) and mounts into this
-// container read-only. No public CA is involved: the names are local development hosts,
-// which no public CA would issue for anyway.
+// They are signed by a local certificate authority that the orchestrator creates (ddt
+// does, when the proxy starts) and mounts into this container read-only. No public CA
+// is involved: the names are local development hosts, which no public CA would issue
+// for anyway. Software that verifies these certificates trusts that CA itself.
 package certs
 
 import (
