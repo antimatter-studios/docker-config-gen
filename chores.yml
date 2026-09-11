@@ -56,7 +56,7 @@ tasks:
 
   image:smoke:
     desc: Build the image and check the binary in it starts, and fails legibly without a docker socket
-    deps: [image:build]
+    deps: ['image:build']
     vars:
       # Named per run, so two runs at once never touch each other's container.
       CONTAINER:
