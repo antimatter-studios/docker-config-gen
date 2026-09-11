@@ -66,11 +66,11 @@ environment:
 
 ## HTTPS
 
-When a CA is mounted at `CA_DIR` (`ca.crt` and `ca.key`, PEM), every HTTP host is also served over HTTPS. There is no label for it: the host name is the certificate's name. For each host the generator keeps `<host>.crt` and `<host>.key` in `CERTS_DIR`, issuing them on first sight and replacing them when fewer than 30 days remain, when the CA changes, or when they don't match the host. Certificates are valid for 825 days, the most Apple platforms accept.
+When a CA is mounted at `CA_DIR` (`ca.crt` and `ca.key`, PEM), every HTTP host is also served over HTTPS. There is no label for it: the host name is the certificate's name. For each host the generator keeps `<host>.pem` in `CERTS_DIR`, holding the certificate and its key together so a renewal replaces both at once (a host name too long to be a file name is hashed). It is issued on first sight and replaced when fewer than 30 days remain, when the CA changes, or when it doesn't match the host. Certificates are valid for 825 days, the most Apple platforms accept.
 
 A host the CA cannot vouch for, such as a name outside the CA's name constraints or an nginx regular expression, is logged once and stays HTTP-only. With no CA mounted, every host is HTTP-only, as before.
 
-The CA is created by the orchestrator (ddt does this when the proxy starts); this container only reads it. Software that should verify the proxy's certificates trusts that CA directly.
+The CA is created by the orchestrator (ddt does this when the proxy starts); this container only reads it, once, when it starts, so restart it after replacing the CA (ddt does). Software that should verify the proxy's certificates trusts that CA directly.
 
 ## Renderer
 

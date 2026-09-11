@@ -12,9 +12,10 @@ services:
       # Shared volume for the per-host certificates the proxy serves HTTPS with. Mounted
       # at the same path as in the proxy, since that path goes into its configuration.
       - certs:/etc/nginx/certs
-      # The CA those certificates are issued with (ca.crt and ca.key). Without it every
-      # host is HTTP-only.
-      - ca:/etc/docker-config-gen/ca:ro
+      # HTTPS is opt-in: mount the CA the certificates are issued with (ca.crt and
+      # ca.key) by uncommenting this line and the `ca` volume below, or bind a directory
+      # instead (- ./ca:/etc/docker-config-gen/ca:ro). Without it every host is HTTP-only.
+      # - ca:/etc/docker-config-gen/ca:ro
     environment:
       # turns on a lot of useful debugging for dev purposes
       # warning: don't use this for production, it outputs env vars into the logs
@@ -31,5 +32,5 @@ volumes:
     external: true
   certs:
     external: true
-  ca:
-    external: true
+  # ca:
+  #   external: true

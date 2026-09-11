@@ -125,33 +125,28 @@ func (i *Issuer) Certificate(host string) (certFile, keyFile string, changed, ok
 		return "", "", false, false
 	}
 
-	base := strings.Replace(name, "*", "_wildcard", 1)
-	certFile = filepath.Join(i.dir, base+".crt")
-	keyFile = filepath.Join(i.dir, base+".key")
-
-	if i.current(name, certFile, keyFile) {
-		return certFile, keyFile, false, true
+	// The certificate and its key share one file, so a renewal replaces both in a single
+	// rename and they can never disagree. nginx reads the key from that file too.
+	file := filepath.Join(i.dir, fileName(name))
+	if i.current(name, file) {
+		return file, file, false, true
 	}
-	if err := i.issue(name, certFile, keyFile); err != nil {
+	if err := i.issue(name, file); err != nil {
 		i.refuse(host, err.Error())
 		return "", "", false, false
 	}
 	delete(i.refused, host)
-	return certFile, keyFile, true, true
+	return file, file, true, true
 }
 
-// current reports whether the files hold a matching certificate and key, for name,
-// from this CA, with more than RenewBefore left.
-func (i *Issuer) current(name, certFile, keyFile string) bool {
-	certPEM, err := os.ReadFile(certFile)
+// current reports whether file holds a matching certificate and key, for name, from
+// this CA, with more than RenewBefore left.
+func (i *Issuer) current(name, file string) bool {
+	data, err := os.ReadFile(file)
 	if err != nil {
 		return false
 	}
-	keyPEM, err := os.ReadFile(keyFile)
-	if err != nil {
-		return false
-	}
-	pair, err := tls.X509KeyPair(certPEM, keyPEM)
+	pair, err := tls.X509KeyPair(data, data)
 	if err != nil {
 		return false
 	}
@@ -165,8 +160,8 @@ func (i *Issuer) current(name, certFile, keyFile string) bool {
 	return leaf.NotAfter.Sub(i.now()) > RenewBefore
 }
 
-// issue writes a new key and certificate for name.
-func (i *Issuer) issue(name, certFile, keyFile string) error {
+// issue writes a new certificate and key for name into file.
+func (i *Issuer) issue(name, file string) error {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return fmt.Errorf("generating a key: %w", err)
@@ -210,11 +205,12 @@ func (i *Issuer) issue(name, certFile, keyFile string) error {
 	if err != nil {
 		return fmt.Errorf("encoding the key: %w", err)
 	}
-	if err := writeFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
-		return fmt.Errorf("writing the key: %w", err)
-	}
-	if err := writeFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644); err != nil {
-		return fmt.Errorf("writing the certificate: %w", err)
+	// The certificate first: nginx takes the chain from the leading CERTIFICATE blocks
+	// and the key from the PRIVATE KEY block. Mode 0600, because the key is in it.
+	data := append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})...)
+	if err := writeFile(file, data, 0o600); err != nil {
+		return fmt.Errorf("writing %s: %w", file, err)
 	}
 	return nil
 }

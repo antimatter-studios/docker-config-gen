@@ -239,3 +239,38 @@ func TestLoadRefusesAMismatchedKey(t *testing.T) {
 		t.Errorf("err = %v, want a load failure", err)
 	}
 }
+
+// A certificate and key kept as two files can disagree: if the second write fails, the
+// new key sits beside the old certificate and nginx refuses the pair. One file holding
+// both is replaced by a single rename, so it never can.
+func TestCertificateAndKeyAreOneFile(t *testing.T) {
+	i := load(t, newCA(t), t.TempDir())
+	certFile, keyFile, _, ok := i.Certificate("app.localhost")
+	if !ok {
+		t.Fatal("no certificate")
+	}
+	if certFile != keyFile {
+		t.Errorf("the certificate (%s) and key (%s) are separate files", certFile, keyFile)
+	}
+}
+
+// A DNS name may be 253 bytes but a file name only 255, and the extension has to fit
+// too. A host that long must still get its certificate.
+func TestLongHostName(t *testing.T) {
+	label := strings.Repeat("a", 63)
+	host := strings.Join([]string{label, label, label, strings.Repeat("b", 51), "localhost"}, ".")
+	if len(host) != 253 {
+		t.Fatalf("test host is %d bytes, want 253", len(host))
+	}
+	caDir := newCA(t)
+	certFile, _, _, ok := load(t, caDir, t.TempDir()).Certificate(host)
+	if !ok {
+		t.Fatal("no certificate for a 253-byte host name")
+	}
+	if n := len(filepath.Base(certFile)); n > 255 {
+		t.Errorf("file name is %d bytes", n)
+	}
+	if err := trusts(t, caDir, leaf(t, certFile), host); err != nil {
+		t.Errorf("the certificate does not cover the host: %v", err)
+	}
+}
