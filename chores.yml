@@ -1,0 +1,105 @@
+version: '3'
+
+# The everyday commands for this repo, run with `chore <name>`.
+#
+# The renderer tests that use the real proxy template (TestMaxBodySize, TestHTTPS) read
+# ../docker-proxy/nginx.template, so check docker-proxy out beside this repo. Without it
+# they skip locally; CI checks it out and refuses to let them skip.
+
+vars:
+  BINARY: docker-config-gen
+  CMD_DIR: ./cmd/docker-config-gen
+  IMAGE: '{{.IMAGE | default "ghcr.io/antimatter-studios/docker-config-gen:dev"}}'
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - chore --list
+
+  build:
+    desc: Build the binary
+    cmds:
+      - go build -o bin/{{.BINARY}} {{.CMD_DIR}}
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - bin/{{.BINARY}}
+
+  run:
+    desc: Build and run the binary
+    deps: [build]
+    cmds:
+      - ./bin/{{.BINARY}} {{.CLI_ARGS}}
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test ./...
+
+  lint:
+    desc: Run linter
+    cmds:
+      - golangci-lint run ./...
+
+  tidy:
+    desc: Tidy go modules
+    cmds:
+      - go mod tidy
+
+  image:build:
+    desc: Build the Docker image
+    cmds:
+      - docker build -t {{.IMAGE}} .
+
+  image:smoke:
+    desc: Build the image and check the binary in it starts, and fails legibly without a docker socket
+    deps: ['image:build']
+    vars:
+      # Named per run, so two runs at once never touch each other's container.
+      CONTAINER:
+        sh: echo "docker-config-gen-smoke-$(date +%s)-$$"
+    cmds:
+      - defer: docker rm -f {{.CONTAINER}} >/dev/null 2>&1 || true
+      # The generator takes no flags: it is configured by environment variables and then
+      # watches the docker socket, so there is no --help to run and no single pass to
+      # make. What can be checked is that the binary starts and reports a missing socket
+      # legibly, rather than panicking or hanging. Running it against a real proxy is
+      # the end-to-end test in docker-dev-tools.
+      - docker run -d --name {{.CONTAINER}} -e DOCKER_SOCKET=/nonexistent/docker.sock {{.IMAGE}} docker-config-gen >/dev/null
+      - |
+        running=true
+        for i in $(seq 1 30); do
+          running=$(docker inspect -f '{{`{{.State.Running}}`}}' {{.CONTAINER}})
+          [ "$running" = false ] && break
+          sleep 1
+        done
+        out=$(docker logs {{.CONTAINER}} 2>&1)
+        echo "$out"
+        if [ "$running" != false ]; then
+          echo "the binary hung with no docker socket instead of failing" >&2
+          exit 1
+        fi
+        rc=$(docker inspect -f '{{`{{.State.ExitCode}}`}}' {{.CONTAINER}})
+        echo "exit=$rc"
+        case "$out" in
+          *panic:*|*"runtime error"*)
+            echo "the binary panicked instead of reporting the problem" >&2
+            exit 1
+            ;;
+        esac
+        if [ "$rc" = 0 ]; then
+          echo "the binary reported success with no docker socket" >&2
+          exit 1
+        fi
+        if ! echo "$out" | grep -qi docker; then
+          echo "the failure does not mention docker, so it would not be diagnosable" >&2
+          exit 1
+        fi
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -rf bin/

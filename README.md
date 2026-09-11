@@ -2,7 +2,7 @@
 
 `docker-config-gen` is a Docker event watcher + configuration generator.
 
-It connects to the Docker daemon via the read-only Docker socket, inspects containers, and renders configuration changes using a renderer (currently: `nginx`).
+It connects to the Docker daemon through the Docker socket, inspects containers, and renders configuration changes using a renderer (currently: `nginx`). It also creates the sidecar containers that publish TCP/UDP ports, so it needs full access to the socket.
 
 ## How it works
 
@@ -11,19 +11,26 @@ It connects to the Docker daemon via the read-only Docker socket, inspects conta
 - **[Rendering]** Uses `RENDERER` to generate output (for nginx reverse-proxying).
 - **[Management socket]** Talks to the proxy over a Unix domain socket on a shared Docker volume.
 
-## Docker Compose (recommended)
+## Running it
 
-This repo ships a `docker-compose.yml` that runs config-gen with the correct socket + shared volumes. The important parts are:
+[ddt](https://github.com/antimatter-studios/docker-dev-tools) runs it beside the proxy (`ddt proxy start`), with the Docker socket, the shared volumes and, for HTTPS, its CA. To try a local build, run `chore image:build`, then point a ddt that has `ddt proxy config-gen-image` at it (`ddt proxy config-gen-image ghcr.io/antimatter-studios/docker-config-gen:dev`) and `ddt proxy restart`.
 
-- `- /var/run/docker.sock:/var/run/docker.sock:ro`
-- `- management:/var/run/proxy`
-- `- certs:/etc/nginx/certs` and `- <ca>:/etc/docker-config-gen/ca:ro` (only for [HTTPS](#https))
-- `MANAGEMENT_SOCKET=/var/run/proxy/management.sock`
-- `RENDERER=nginx`
-- `PROXY_CONTAINER=docker-proxy`
-- `CA_DIR=/etc/docker-config-gen/ca` and `CERTS_DIR=/etc/nginx/certs` (the defaults)
+Running it by hand means reproducing that setup:
 
-`management` and `certs` are expected to be shared with `docker-proxy` (typically `external: true`). Mount `certs` at the same path in both containers: the paths written here go into the proxy's configuration.
+- the Docker socket, `/var/run/docker.sock`
+- the management volume at `/var/run/proxy`, shared with docker-proxy
+- the certs volume at `/etc/nginx/certs`, mounted at the same path in docker-proxy (the paths written here go into its configuration), and for [HTTPS](#https) the CA at `/etc/docker-config-gen/ca`, read-only
+- `MANAGEMENT_SOCKET=/var/run/proxy/management.sock`, `RENDERER=nginx`, `PROXY_CONTAINER=<the proxy's container name>`, and optionally `CA_DIR` and `CERTS_DIR` (defaults `/etc/docker-config-gen/ca` and `/etc/nginx/certs`)
+
+## Developing it
+
+```bash
+chore test          # unit tests; the real-template tests need docker-proxy checked out beside this repo
+chore lint
+chore image:smoke   # build the image and check the binary in it starts, and fails legibly without a socket
+```
+
+CI runs the same, and a pull request merges itself once CI passes.
 
 ## Container label format
 

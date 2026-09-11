@@ -9,12 +9,21 @@ on:
       - '*.*.*'
     paths-ignore:
       - '.gitignore'
-      - 'docker-compose.yml'
       - 'LICENSE'
       - '*.md'
 
 env:
   registry: ghcr.io
+
+# One publish at a time per branch or tag, in the order they were started, and never
+# cancelled halfway. Each run builds the commit its ref pointed at when it was started,
+# so on main the run that finishes last is always the newest and `latest` cannot roll
+# back to an older image. Tags get a group of their own: GitHub keeps only one pending
+# run per group, and a release waiting behind a main build must not be dropped when a
+# newer main build arrives.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   test:
@@ -26,7 +35,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version-file: go.mod
 
       - name: Run tests
         run: go test ./...
