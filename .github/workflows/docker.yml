@@ -9,12 +9,18 @@ on:
       - '*.*.*'
     paths-ignore:
       - '.gitignore'
-      - 'docker-compose.yml'
       - 'LICENSE'
       - '*.md'
 
 env:
   registry: ghcr.io
+
+# One publish at a time, in the order they were started, and never cancelled halfway.
+# Each run builds the commit main pointed at when it was started, so the run that
+# finishes last is always the newest and `latest` cannot roll back to an older image.
+concurrency:
+  group: publish
+  cancel-in-progress: false
 
 jobs:
   test:
@@ -26,7 +32,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version-file: go.mod
 
       - name: Run tests
         run: go test ./...

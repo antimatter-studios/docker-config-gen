@@ -9,3 +9,15 @@ updates:
     labels:
       - "area/chore"
       - "area/dockerfile"
+
+  # Go modules
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # The workflows' actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
