@@ -8,12 +8,9 @@ import (
 	"strings"
 
 	"github.com/christhomas/docker-config-gen/internal/config"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 // Client wraps the Docker SDK client with config-gen specific methods.
@@ -23,10 +20,10 @@ type Client struct {
 }
 
 // NewClient creates a new Docker client connected to the given socket.
+// The client negotiates the API version with the daemon on first use.
 func NewClient(socketPath string, debug bool) (*Client, error) {
-	cli, err := client.NewClientWithOpts(
-		client.WithHost("unix://"+socketPath),
-		client.WithAPIVersionNegotiation(),
+	cli, err := client.New(
+		client.WithHost("unix://" + socketPath),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("creating docker client: %w", err)
@@ -42,10 +39,11 @@ func (c *Client) Close() error {
 
 // GetProxyNetworks inspects the proxy container and returns its non-bridge networks.
 func (c *Client) GetProxyNetworks(ctx context.Context, proxyContainer string) (config.NetworkMap, error) {
-	inspectData, err := c.cli.ContainerInspect(ctx, proxyContainer)
+	res, err := c.cli.ContainerInspect(ctx, proxyContainer, client.ContainerInspectOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("inspecting proxy container %s: %w", proxyContainer, err)
 	}
+	inspectData := res.Container
 
 	networks := makeNetworkListFromInspect(inspectData.NetworkSettings.Networks, nil, c.debug)
 
@@ -62,12 +60,12 @@ func (c *Client) MakeContainerIDList(ctx context.Context, networks config.Networ
 	idSet := make(map[string]struct{})
 
 	for _, net := range networks {
-		inspectData, err := c.cli.NetworkInspect(ctx, net.ID, network.InspectOptions{})
+		res, err := c.cli.NetworkInspect(ctx, net.ID, client.NetworkInspectOptions{})
 		if err != nil {
 			return nil, fmt.Errorf("inspecting network %s: %w", net.ID, err)
 		}
 
-		for id := range inspectData.Containers {
+		for id := range res.Network.Containers {
 			idSet[id] = struct{}{}
 		}
 	}
@@ -80,11 +78,12 @@ func (c *Client) MakeContainerList(ctx context.Context, containerIDs map[string]
 	var containers []config.Container
 
 	for id := range containerIDs {
-		inspectData, err := c.cli.ContainerInspect(ctx, id)
+		res, err := c.cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 		if err != nil {
 			log.Printf("WARNING: could not inspect container %s: %v", id, err)
 			continue
 		}
+		inspectData := res.Container
 
 		name := strings.TrimLeft(inspectData.Name, "/")
 
@@ -103,16 +102,16 @@ func (c *Client) MakeContainerList(ctx context.Context, containerIDs map[string]
 
 // ListRunningContainerIDs returns the IDs of all running containers.
 func (c *Client) ListRunningContainerIDs(ctx context.Context) ([]string, error) {
-	f := filters.NewArgs()
+	f := make(client.Filters)
 	f.Add("status", "running")
 
-	containers, err := c.cli.ContainerList(ctx, container.ListOptions{Filters: f})
+	res, err := c.cli.ContainerList(ctx, client.ContainerListOptions{Filters: f})
 	if err != nil {
 		return nil, fmt.Errorf("listing running containers: %w", err)
 	}
 
-	ids := make([]string, len(containers))
-	for i, ctr := range containers {
+	ids := make([]string, len(res.Items))
+	for i, ctr := range res.Items {
 		ids[i] = ctr.ID
 	}
 	return ids, nil
@@ -120,21 +119,23 @@ func (c *Client) ListRunningContainerIDs(ctx context.Context) ([]string, error) 
 
 // GetContainerID returns the container ID for a given name or ID.
 func (c *Client) GetContainerID(ctx context.Context, nameOrID string) (string, error) {
-	info, err := c.cli.ContainerInspect(ctx, nameOrID)
+	res, err := c.cli.ContainerInspect(ctx, nameOrID, client.ContainerInspectOptions{})
 	if err != nil {
 		return "", fmt.Errorf("inspecting %s: %w", nameOrID, err)
 	}
-	return info.ID, nil
+	return res.Container.ID, nil
 }
 
 // ConnectNetwork connects a container to a Docker network.
 func (c *Client) ConnectNetwork(ctx context.Context, networkName, containerID string) error {
-	return c.cli.NetworkConnect(ctx, networkName, containerID, nil)
+	_, err := c.cli.NetworkConnect(ctx, networkName, client.NetworkConnectOptions{Container: containerID})
+	return err
 }
 
 // DisconnectNetwork disconnects a container from a Docker network.
 func (c *Client) DisconnectNetwork(ctx context.Context, networkName, containerID string) error {
-	return c.cli.NetworkDisconnect(ctx, networkName, containerID, false)
+	_, err := c.cli.NetworkDisconnect(ctx, networkName, client.NetworkDisconnectOptions{Container: containerID})
+	return err
 }
 
 // DiscoverProxiedNetworks inspects all running containers and returns the set
@@ -150,10 +151,11 @@ func (c *Client) DiscoverProxiedNetworks(ctx context.Context) (map[string]struct
 	needed := make(map[string]struct{})
 
 	for _, id := range ids {
-		info, err := c.cli.ContainerInspect(ctx, id)
+		res, err := c.cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 		if err != nil {
 			continue
 		}
+		info := res.Container
 
 		env := makeEnvList(info.Config.Env)
 		if !isProxied(env, info.Config.Labels) {
@@ -227,10 +229,17 @@ func makeNetworkListFromInspect(networks map[string]*network.EndpointSettings, a
 			}
 		}
 
+		// An endpoint without an address decodes to the zero Addr, which
+		// would print as "invalid IP"; keep it as an empty string instead.
+		ipAddress := ""
+		if endpoint.IPAddress.IsValid() {
+			ipAddress = endpoint.IPAddress.String()
+		}
+
 		result[endpoint.NetworkID] = config.Network{
 			Name:      name,
 			ID:        endpoint.NetworkID,
-			IPAddress: endpoint.IPAddress,
+			IPAddress: ipAddress,
 		}
 	}
 
@@ -253,13 +262,13 @@ func makeEnvList(envVars []string) map[string]string {
 
 // EnsureImage pulls an image if it is not already present locally.
 func (c *Client) EnsureImage(ctx context.Context, ref string) error {
-	_, _, err := c.cli.ImageInspectWithRaw(ctx, ref)
+	_, err := c.cli.ImageInspect(ctx, ref)
 	if err == nil {
 		return nil // already present
 	}
 
 	log.Printf("Pulling image %s...", ref)
-	reader, err := c.cli.ImagePull(ctx, ref, image.PullOptions{})
+	reader, err := c.cli.ImagePull(ctx, ref, client.ImagePullOptions{})
 	if err != nil {
 		return fmt.Errorf("pulling image %s: %w", ref, err)
 	}
@@ -271,7 +280,12 @@ func (c *Client) EnsureImage(ctx context.Context, ref string) error {
 
 // CreateContainer creates a container with the given configuration and returns its ID.
 func (c *Client) CreateContainer(ctx context.Context, cfg *container.Config, hostCfg *container.HostConfig, netCfg *network.NetworkingConfig, name string) (string, error) {
-	resp, err := c.cli.ContainerCreate(ctx, cfg, hostCfg, netCfg, nil, name)
+	resp, err := c.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:           cfg,
+		HostConfig:       hostCfg,
+		NetworkingConfig: netCfg,
+		Name:             name,
+	})
 	if err != nil {
 		return "", fmt.Errorf("creating container %s: %w", name, err)
 	}
@@ -280,17 +294,19 @@ func (c *Client) CreateContainer(ctx context.Context, cfg *container.Config, hos
 
 // StartContainer starts a previously created container.
 func (c *Client) StartContainer(ctx context.Context, containerID string) error {
-	return c.cli.ContainerStart(ctx, containerID, container.StartOptions{})
+	_, err := c.cli.ContainerStart(ctx, containerID, client.ContainerStartOptions{})
+	return err
 }
 
 // RemoveContainer force-removes a container (stops it if running).
 func (c *Client) RemoveContainer(ctx context.Context, containerID string) error {
-	return c.cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
+	_, err := c.cli.ContainerRemove(ctx, containerID, client.ContainerRemoveOptions{Force: true})
+	return err
 }
 
 // ListContainersByLabel returns containers matching all given labels (including stopped).
 func (c *Client) ListContainersByLabel(ctx context.Context, labels map[string]string) ([]container.Summary, error) {
-	f := filters.NewArgs()
+	f := make(client.Filters)
 	for k, v := range labels {
 		if v == "" {
 			f.Add("label", k)
@@ -299,22 +315,23 @@ func (c *Client) ListContainersByLabel(ctx context.Context, labels map[string]st
 		}
 	}
 
-	return c.cli.ContainerList(ctx, container.ListOptions{
+	res, err := c.cli.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
 		Filters: f,
 	})
+	return res.Items, err
 }
 
 // EnsureNetwork creates a Docker network if it doesn't already exist and returns its ID.
 func (c *Client) EnsureNetwork(ctx context.Context, name string) (string, error) {
 	// Check if network already exists.
-	inspectData, err := c.cli.NetworkInspect(ctx, name, network.InspectOptions{})
+	res, err := c.cli.NetworkInspect(ctx, name, client.NetworkInspectOptions{})
 	if err == nil {
-		return inspectData.ID, nil
+		return res.Network.ID, nil
 	}
 
 	log.Printf("Creating network %s", name)
-	resp, err := c.cli.NetworkCreate(ctx, name, network.CreateOptions{
+	resp, err := c.cli.NetworkCreate(ctx, name, client.NetworkCreateOptions{
 		Driver: "bridge",
 	})
 	if err != nil {
@@ -323,18 +340,17 @@ func (c *Client) EnsureNetwork(ctx context.Context, name string) (string, error)
 	return resp.ID, nil
 }
 
-// makePortList converts Docker's nat.PortMap to our simplified Port slice.
-func makePortList(ports nat.PortMap) []config.Port {
+// makePortList converts Docker's network.PortMap to our simplified Port slice.
+func makePortList(ports network.PortMap) []config.Port {
 	var result []config.Port
 
 	for portProto, bindings := range ports {
-		parts := strings.SplitN(string(portProto), "/", 2)
-		if len(parts) != 2 {
+		if !portProto.IsValid() {
 			log.Printf("ERROR: could not parse port/proto from %q", portProto)
 			continue
 		}
-		containerPort := parts[0]
-		containerProto := parts[1]
+		containerPort := portProto.Port()
+		containerProto := string(portProto.Proto())
 
 		if bindings == nil {
 			result = append(result, config.Port{
@@ -345,7 +361,7 @@ func makePortList(ports nat.PortMap) []config.Port {
 		}
 
 		for _, binding := range bindings {
-			if binding.HostIP == "" || binding.HostPort == "" {
+			if !binding.HostIP.IsValid() || binding.HostPort == "" {
 				log.Printf("ERROR: port binding for %s missing HostIP or HostPort: %+v", portProto, binding)
 				continue
 			}
@@ -353,7 +369,7 @@ func makePortList(ports nat.PortMap) []config.Port {
 			result = append(result, config.Port{
 				ContainerPort:  containerPort,
 				ContainerProto: containerProto,
-				HostIP:         binding.HostIP,
+				HostIP:         binding.HostIP.String(),
 				HostPort:       binding.HostPort,
 			})
 		}
