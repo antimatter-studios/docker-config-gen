@@ -5,7 +5,7 @@ go 1.24.0
 require (
 	github.com/docker/docker v28.0.1+incompatible
 	github.com/docker/go-connections v0.5.0
-	github.com/flosch/pongo2/v6 v6.0.0
+	github.com/flosch/pongo2/v6 v6.1.0
 )
 
 require (
