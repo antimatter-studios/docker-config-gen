@@ -29,11 +29,11 @@ jobs:
       # against the template that is live. A pull request that changes both repositories
       # will fail here until the docker-proxy side lands — which is the intended signal:
       # the two must agree, and the template has to be there first.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: docker-config-gen
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: antimatter-studios/docker-proxy
           path: docker-proxy
@@ -81,7 +81,7 @@ jobs:
     name: Image
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install chore (pinned + checksum-verified)
         # CI runs the same tasks a developer does, so it has to use the same runner.
