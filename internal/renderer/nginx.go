@@ -31,9 +31,18 @@ type streamEntry struct {
 	SSL bool
 }
 
-// Nginx renders an Nginx configuration from a Pongo2 (Jinja2) template and container metadata.
-// The template receives ErrorPageData, ServerList, UpstreamList, StreamPortList, and StreamUpstreamList.
+// Nginx renders an Nginx configuration from a Pongo2 (Jinja2) template and container
+// metadata, with every host HTTP-only.
 func Nginx(tmpl string, containerList []config.Container) (config.RenderResult, error) {
+	return NginxWithCertificates(tmpl, containerList, nil)
+}
+
+// NginxWithCertificates renders an Nginx configuration from a Pongo2 (Jinja2) template
+// and container metadata. The template receives ErrorPageData, ServerList, UpstreamList,
+// StreamPortList, and StreamUpstreamList. Each server carries the Certificate and
+// CertificateKey that certs supplies for its host; with no certs, or none for a host,
+// that host is HTTP-only.
+func NginxWithCertificates(tmpl string, containerList []config.Container, certs CertificateSource) (config.RenderResult, error) {
 	log.Println("Processing template...")
 
 	// Filter containers to only those with valid upstream configurations
@@ -181,6 +190,19 @@ func Nginx(tmpl string, containerList []config.Container) (config.RenderResult, 
 		}
 	}
 
+	// Attach each host's certificate. A host the source has none for stays HTTP-only.
+	certsChanged := false
+	if certs != nil {
+		for _, s := range serverMap {
+			certFile, keyFile, changed, ok := certs.Certificate(s.Host)
+			if ok {
+				s.Certificate = certFile
+				s.CertificateKey = keyFile
+			}
+			certsChanged = certsChanged || changed
+		}
+	}
+
 	// Convert maps to slices
 	var servers []config.Server
 	for _, s := range serverMap {
@@ -240,8 +262,9 @@ func Nginx(tmpl string, containerList []config.Container) (config.RenderResult, 
 	}
 
 	return config.RenderResult{
-		Config:      rendered,
-		StreamPorts: streamPortList,
+		Config:              rendered,
+		StreamPorts:         streamPortList,
+		CertificatesChanged: certsChanged,
 	}, nil
 }
 

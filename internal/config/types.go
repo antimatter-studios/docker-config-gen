@@ -10,6 +10,10 @@ const (
 type RenderResult struct {
 	Config      string
 	StreamPorts []StreamPort
+	// CertificatesChanged reports that a host's certificate files were written during
+	// this render. nginx reads certificates only when it loads its configuration, so the
+	// proxy must reload even when the configuration text is unchanged.
+	CertificatesChanged bool
 }
 
 // Network holds network metadata for a container endpoint.
@@ -68,6 +72,10 @@ type Location struct {
 type Server struct {
 	Host      string
 	Locations []Location
+	// Certificate and CertificateKey are the files the proxy serves HTTPS for Host
+	// with. Both are empty when the host has no certificate, and it then stays HTTP-only.
+	Certificate    string
+	CertificateKey string
 }
 
 // VirtualHost captures the virtual hosting parameters for a container.
