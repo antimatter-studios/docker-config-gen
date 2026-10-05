@@ -4,7 +4,7 @@ go 1.27.1
 
 require (
 	github.com/flosch/pongo2/v6 v6.1.0
-	github.com/moby/moby/api v1.56.0
+	github.com/moby/moby/api v1.56.1
 	github.com/moby/moby/client v0.6.0
 )
 
